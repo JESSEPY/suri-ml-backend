@@ -1,5 +1,5 @@
 import pytest
-from data.generate_synthetic_data import generate, COLUMNS
+from data.generate_synthetic_data import generate, COLUMNS, _STK_OM_BANDS
 from data.crop_baselines import CROPS
 
 
@@ -39,6 +39,12 @@ class TestTargetsAreSharedAcrossViews:
             for column in targets:
                 assert group[column].nunique() == 1
 
+    def test_crop_and_is_synthetic_are_identical_across_views(self, df):
+        """Crop and is_synthetic flag must be identical for all views of a record."""
+        for _, group in df.groupby("laboratory_code"):
+            assert group["crop"].nunique() == 1
+            assert group["is_synthetic"].nunique() == 1
+
 
 class TestMissingnessPatternPerSource:
     def test_lab_view_has_the_full_panel(self, df):
@@ -69,6 +75,42 @@ class TestMissingnessPatternPerSource:
         stk = df[df.data_source == "stk"]
         assert stk["organic_matter_pct"].notna().all()
         assert stk["total_nitrogen_pct"].notna().all()
+
+    def test_stk_om_is_coarsened_within_expected_bands(self, df):
+        """STK OM must be coarsened to kit-realistic bands, not copied from lab.
+        Given a lab OM value, the STK OM must fall within its corresponding band.
+        Band definition: if lab_om < 2.0 → [0.5, 2.0); if lab_om < 3.5 → [2.0, 3.5);
+        if lab_om >= 3.5 → [3.5, 6.0]."""
+        lab = df[df.data_source == "lab"]
+        stk = df[df.data_source == "stk"]
+
+        # Merge lab and stk on laboratory_code to compare OM values
+        lab_om = lab[["laboratory_code", "organic_matter_pct"]].rename(
+            columns={"organic_matter_pct": "lab_om"}
+        )
+        stk_om = stk[["laboratory_code", "organic_matter_pct"]].rename(
+            columns={"organic_matter_pct": "stk_om"}
+        )
+        merged = lab_om.merge(stk_om, on="laboratory_code")
+
+        # For each row, check that stk_om falls within the band for its lab_om
+        for _, row in merged.iterrows():
+            lab_om_val = row["lab_om"]
+            stk_om_val = row["stk_om"]
+
+            # Determine which band the lab_om value falls into
+            band_low, band_high = None, None
+            for upper, (low, high) in _STK_OM_BANDS:
+                if lab_om_val < upper:
+                    band_low, band_high = low, high
+                    break
+
+            # STK OM should fall within [band_low, band_high]
+            # Using small epsilon for floating-point comparison
+            assert band_low <= stk_om_val <= band_high, (
+                f"STK OM {stk_om_val} for lab OM {lab_om_val} outside band "
+                f"[{band_low}, {band_high}]"
+            )
 
 
 class TestValueRanges:

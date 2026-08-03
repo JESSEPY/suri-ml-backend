@@ -19,7 +19,7 @@ from data.crop_baselines import CROPS
 from ml.agronomy import nutrient_requirements, total_nitrogen_from_om
 from ml.recipes import plan_applications
 from ml.remarks import (
-    UNKNOWN, derive_ph_remark, derive_om_remark, derive_p_remark, derive_k_remark,
+    derive_ph_remark, derive_om_remark, derive_p_remark, derive_k_remark,
 )
 
 RANDOM_SEED = 42
