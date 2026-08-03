@@ -8,11 +8,11 @@
 
 **Tech Stack:** Python 3.11+, scikit-learn, XGBoost, pandas, FastAPI, Pydantic v2, supabase-py, pytest.
 
-**Spec:** `suri-ml-backend/docs/superpowers/specs/2026-08-03-suri-fertilizer-ml-pipeline-design.md`
+**Spec:** `docs/superpowers/specs/2026-08-03-suri-fertilizer-ml-pipeline-design.md`
 
 ## Global Constraints
 
-- All work happens in `suri-ml-backend/`. **Never modify anything under `suri/`** — that is a separate Next.js app and is explicitly out of scope (spec §15).
+- All work happens in this repo (`suri-ml-backend`). **Never modify anything under the sibling `suri/` app** — that is a separate Next.js app and is explicitly out of scope (spec §15).
 - Service runs on **port 8001**, never 8000 (port 8000 is claimed by an unrelated existing contract in `suri/features/flows/iot/IoTFlow.tsx`).
 - Total Nitrogen is **always** `organic_matter_pct * 0.05`, never an independent measurement (spec §2).
 - Nutrient targets are **kg/ha rates**; `farm_area_sqm` is a post-prediction scaler and **must never be a model feature** (spec §3.1).
@@ -48,11 +48,11 @@
 ## Task 1: Project scaffolding and remark derivation
 
 **Files:**
-- Create: `suri-ml-backend/requirements.txt`
-- Create: `suri-ml-backend/pytest.ini`
-- Create: `suri-ml-backend/ml/__init__.py`, `suri-ml-backend/data/__init__.py`, `suri-ml-backend/tests/__init__.py`
-- Create: `suri-ml-backend/ml/remarks.py`
-- Test: `suri-ml-backend/tests/test_remarks.py`
+- Create: `requirements.txt`
+- Create: `pytest.ini`
+- Create: `ml/__init__.py`, `data/__init__.py`, `tests/__init__.py`
+- Create: `ml/remarks.py`
+- Test: `tests/test_remarks.py`
 
 **Interfaces:**
 - Consumes: nothing (first task)
@@ -67,7 +67,6 @@
 - [ ] **Step 1: Create the directory structure and dependency files**
 
 ```bash
-cd suri-ml-backend
 mkdir -p ml data tests supabase/migrations
 touch ml/__init__.py data/__init__.py tests/__init__.py
 ```
@@ -296,7 +295,7 @@ Expected: PASS — all tests green.
 - [ ] **Step 7: Commit**
 
 ```bash
-git add suri-ml-backend/requirements.txt suri-ml-backend/pytest.ini suri-ml-backend/ml suri-ml-backend/data suri-ml-backend/tests
+git add requirements.txt pytest.ini ml data tests
 git commit -m "feat: add project scaffolding and soil remark derivation"
 ```
 
@@ -305,9 +304,9 @@ git commit -m "feat: add project scaffolding and soil remark derivation"
 ## Task 2: Crop baselines and nutrient requirement formulas
 
 **Files:**
-- Create: `suri-ml-backend/data/crop_baselines.py`
-- Create: `suri-ml-backend/ml/agronomy.py`
-- Test: `suri-ml-backend/tests/test_agronomy.py`
+- Create: `data/crop_baselines.py`
+- Create: `ml/agronomy.py`
+- Test: `tests/test_agronomy.py`
 
 **Interfaces:**
 - Consumes: nothing from Task 1
@@ -517,7 +516,7 @@ Expected: PASS. The golden record yields approximately (46, 45, 57) against the 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add suri-ml-backend/data/crop_baselines.py suri-ml-backend/ml/agronomy.py suri-ml-backend/tests/test_agronomy.py
+git add data/crop_baselines.py ml/agronomy.py tests/test_agronomy.py
 git commit -m "feat: add crop baselines and nutrient requirement formulas"
 ```
 
@@ -526,8 +525,8 @@ git commit -m "feat: add crop baselines and nutrient requirement formulas"
 ## Task 3: Fertilizer recipe planner
 
 **Files:**
-- Create: `suri-ml-backend/ml/recipes.py`
-- Test: `suri-ml-backend/tests/test_recipes.py`
+- Create: `ml/recipes.py`
+- Test: `tests/test_recipes.py`
 
 **Interfaces:**
 - Consumes: nothing
@@ -693,7 +692,7 @@ Expected: PASS — including the golden test reproducing the real report string 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add suri-ml-backend/ml/recipes.py suri-ml-backend/tests/test_recipes.py
+git add ml/recipes.py tests/test_recipes.py
 git commit -m "feat: add fertilizer application planner validated against real DA report"
 ```
 
@@ -702,8 +701,8 @@ git commit -m "feat: add fertilizer application planner validated against real D
 ## Task 4: Synthetic data generator with three-view expansion
 
 **Files:**
-- Create: `suri-ml-backend/data/generate_synthetic_data.py`
-- Test: `suri-ml-backend/tests/test_generate_synthetic_data.py`
+- Create: `data/generate_synthetic_data.py`
+- Test: `tests/test_generate_synthetic_data.py`
 
 **Interfaces:**
 - Consumes: `ml.remarks.*` (Task 1), `data.crop_baselines.CROPS` and `ml.agronomy.*` (Task 2), `ml.recipes.plan_applications` (Task 3)
@@ -1012,21 +1011,21 @@ Expected: `Wrote 15000 rows (5000 records x 3 views) to suri_synthetic_training_
 - [ ] **Step 6: Commit**
 
 ```bash
-git add suri-ml-backend/data/generate_synthetic_data.py suri-ml-backend/tests/test_generate_synthetic_data.py
+git add data/generate_synthetic_data.py tests/test_generate_synthetic_data.py
 git commit -m "feat: add synthetic data generator with per-source view expansion"
 ```
 
-Note: do **not** commit the generated CSV — add `suri-ml-backend/*.csv` to `.gitignore` in this step. It is reproducible from the seed.
+Note: do **not** commit the generated CSV — add `*.csv` to `.gitignore` in this step. It is reproducible from the seed.
 
 ---
 
 ## Task 5: Supabase schema and ingestion
 
 **Files:**
-- Create: `suri-ml-backend/supabase/migrations/20260803_ml_fertilizer_tables.sql`
-- Create: `suri-ml-backend/data/ingest_to_supabase.py`
-- Create: `suri-ml-backend/.env.example`
-- Test: `suri-ml-backend/tests/test_ingest_to_supabase.py`
+- Create: `supabase/migrations/20260803_ml_fertilizer_tables.sql`
+- Create: `data/ingest_to_supabase.py`
+- Create: `.env.example`
+- Test: `tests/test_ingest_to_supabase.py`
 
 **Interfaces:**
 - Consumes: `data.generate_synthetic_data.COLUMNS` (Task 4)
@@ -1035,7 +1034,7 @@ Note: do **not** commit the generated CSV — add `suri-ml-backend/*.csv` to `.g
   - `data.ingest_to_supabase.chunked(records: list[dict], size: int) -> Iterator[list[dict]]`
   - `data.ingest_to_supabase.ingest(csv_path: str, batch_size: int = 500) -> int` returning rows upserted
 
-**Environment:** reuses the existing Supabase project from `suri/.env.local`. Copy `NEXT_PUBLIC_SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` into `suri-ml-backend/.env` as `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY`.
+**Environment:** reuses the existing Supabase project from `suri/.env.local`. Copy `NEXT_PUBLIC_SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` into `.env` as `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY`.
 
 - [ ] **Step 1: Write the migration**
 
@@ -1205,7 +1204,7 @@ def get_client() -> Client:
     if not url or not key:
         raise RuntimeError(
             "SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY must be set. "
-            "Copy them from suri/.env.local into suri-ml-backend/.env"
+            "Copy them from suri/.env.local into .env"
         )
     return create_client(url, key)
 
@@ -1255,7 +1254,7 @@ Verify in Supabase: `SELECT data_source, count(*) FROM ml_soil_training_data GRO
 - [ ] **Step 8: Commit**
 
 ```bash
-git add suri-ml-backend/supabase suri-ml-backend/data/ingest_to_supabase.py suri-ml-backend/tests/test_ingest_to_supabase.py suri-ml-backend/.env.example
+git add supabase data/ingest_to_supabase.py tests/test_ingest_to_supabase.py .env.example
 git commit -m "feat: add Supabase schema and training data ingestion"
 ```
 
@@ -1264,8 +1263,8 @@ git commit -m "feat: add Supabase schema and training data ingestion"
 ## Task 6: Preprocessing pipeline
 
 **Files:**
-- Create: `suri-ml-backend/ml/preprocessing.py`
-- Test: `suri-ml-backend/tests/test_preprocessing.py`
+- Create: `ml/preprocessing.py`
+- Test: `tests/test_preprocessing.py`
 
 **Interfaces:**
 - Consumes: `ml.remarks.PH_ORDER/OM_ORDER/P_ORDER/K_ORDER` (Task 1), `data.crop_baselines.CROPS` (Task 2)
@@ -1481,7 +1480,7 @@ Expected: PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add suri-ml-backend/ml/preprocessing.py suri-ml-backend/tests/test_preprocessing.py
+git add ml/preprocessing.py tests/test_preprocessing.py
 git commit -m "feat: add preprocessing with missingness indicators and ordinal remarks"
 ```
 
@@ -1490,8 +1489,8 @@ git commit -m "feat: add preprocessing with missingness indicators and ordinal r
 ## Task 7: Ensemble regressor and classifiers
 
 **Files:**
-- Create: `suri-ml-backend/ml/model.py`
-- Test: `suri-ml-backend/tests/test_model.py`
+- Create: `ml/model.py`
+- Test: `tests/test_model.py`
 
 **Interfaces:**
 - Consumes: nothing (operates on already-transformed arrays)
@@ -1692,7 +1691,7 @@ Expected: PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add suri-ml-backend/ml/model.py suri-ml-backend/tests/test_model.py
+git add ml/model.py tests/test_model.py
 git commit -m "feat: add XGBoost + Kernel Ridge ensemble regressor"
 ```
 
@@ -1701,8 +1700,8 @@ git commit -m "feat: add XGBoost + Kernel Ridge ensemble regressor"
 ## Task 8: Training, grouped evaluation, and artifact writing
 
 **Files:**
-- Create: `suri-ml-backend/ml/train.py`
-- Test: `suri-ml-backend/tests/test_train.py`
+- Create: `ml/train.py`
+- Test: `tests/test_train.py`
 
 **Interfaces:**
 - Consumes: `ml.preprocessing.*` (Task 6), `ml.model.*` (Task 7), `data.generate_synthetic_data.generate` (Task 4)
@@ -2063,19 +2062,19 @@ Expected: a summary table; every target's MAE below its mean-baseline MAE; `Gold
 - [ ] **Step 6: Commit**
 
 ```bash
-git add suri-ml-backend/ml/train.py suri-ml-backend/tests/test_train.py
+git add ml/train.py tests/test_train.py
 git commit -m "feat: add training with grouped splits and golden-record validation"
 ```
 
-Add `suri-ml-backend/ml/artifacts/` to `.gitignore` — artifacts are reproducible and large.
+Add `ml/artifacts/` to `.gitignore` — artifacts are reproducible and large.
 
 ---
 
 ## Task 9: FastAPI service
 
 **Files:**
-- Create: `suri-ml-backend/main.py`
-- Test: `suri-ml-backend/tests/test_api.py`
+- Create: `main.py`
+- Test: `tests/test_api.py`
 
 **Interfaces:**
 - Consumes: `ml.remarks.*` (Task 1), `ml.agronomy.total_nitrogen_from_om` (Task 2), `ml.preprocessing.FEATURE_COLUMNS` (Task 6), `ml.train.ARTIFACT_ROOT` (Task 8), `data.crop_baselines.CROPS` (Task 2)
@@ -2443,7 +2442,7 @@ Expected: all tests across all modules PASS.
 - [ ] **Step 7: Commit**
 
 ```bash
-git add suri-ml-backend/main.py suri-ml-backend/tests/test_api.py
+git add main.py tests/test_api.py
 git commit -m "feat: add FastAPI prediction service on port 8001"
 ```
 
@@ -2452,7 +2451,7 @@ git commit -m "feat: add FastAPI prediction service on port 8001"
 ## Task 10: README
 
 **Files:**
-- Create: `suri-ml-backend/README.md`
+- Create: `README.md`
 
 - [ ] **Step 1: Write the README**
 
@@ -2596,7 +2595,7 @@ Expected: each succeeds; the `curl` example returns a prediction.
 - [ ] **Step 3: Commit**
 
 ```bash
-git add suri-ml-backend/README.md
+git add README.md
 git commit -m "docs: add ML backend README with API contract"
 ```
 
