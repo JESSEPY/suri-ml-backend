@@ -1,5 +1,5 @@
 import pytest
-from data.generate_synthetic_data import generate, COLUMNS, _STK_OM_BANDS
+from data.generate_synthetic_data import generate, COLUMNS
 from data.crop_baselines import CROPS
 
 
@@ -76,41 +76,27 @@ class TestMissingnessPatternPerSource:
         assert stk["organic_matter_pct"].notna().all()
         assert stk["total_nitrogen_pct"].notna().all()
 
-    def test_stk_om_is_coarsened_within_expected_bands(self, df):
-        """STK OM must be coarsened to kit-realistic bands, not copied from lab.
-        Given a lab OM value, the STK OM must fall within its corresponding band.
-        Band definition: if lab_om < 2.0 → [0.5, 2.0); if lab_om < 3.5 → [2.0, 3.5);
-        if lab_om >= 3.5 → [3.5, 6.0]."""
-        lab = df[df.data_source == "lab"]
-        stk = df[df.data_source == "stk"]
+    def test_stk_om_is_not_a_verbatim_copy_of_lab_om(self, df):
+        """If data/generate_synthetic_data.py:133 regressed to copying the lab OM
+        value verbatim instead of coarsening it via _coarsen(), every STK OM would
+        exactly equal its record's lab OM. Correctly-coarsened values will match by
+        incidental coincidence only rarely. With a fixed seed and continuous random
+        sampling within bands, independent resampling produces different values from
+        the original lab OM almost always."""
+        lab = df[df.data_source == "lab"].set_index("laboratory_code")["organic_matter_pct"]
+        stk = df[df.data_source == "stk"].set_index("laboratory_code")["organic_matter_pct"]
 
-        # Merge lab and stk on laboratory_code to compare OM values
-        lab_om = lab[["laboratory_code", "organic_matter_pct"]].rename(
-            columns={"organic_matter_pct": "lab_om"}
+        # Count how many times STK OM exactly equals lab OM
+        matches = (lab == stk).sum()
+        total = len(lab)
+
+        # A verbatim-copy regression produces 100% matches; correct coarsening
+        # produces only rare incidental collisions. 10% is a generous ceiling.
+        match_rate = matches / total
+        assert match_rate < 0.10, (
+            f"STK OM matches lab OM {matches}/{total} times ({100*match_rate:.1f}%) — "
+            f"suggests verbatim copy regression instead of coarsening"
         )
-        stk_om = stk[["laboratory_code", "organic_matter_pct"]].rename(
-            columns={"organic_matter_pct": "stk_om"}
-        )
-        merged = lab_om.merge(stk_om, on="laboratory_code")
-
-        # For each row, check that stk_om falls within the band for its lab_om
-        for _, row in merged.iterrows():
-            lab_om_val = row["lab_om"]
-            stk_om_val = row["stk_om"]
-
-            # Determine which band the lab_om value falls into
-            band_low, band_high = None, None
-            for upper, (low, high) in _STK_OM_BANDS:
-                if lab_om_val < upper:
-                    band_low, band_high = low, high
-                    break
-
-            # STK OM should fall within [band_low, band_high]
-            # Using small epsilon for floating-point comparison
-            assert band_low <= stk_om_val <= band_high, (
-                f"STK OM {stk_om_val} for lab OM {lab_om_val} outside band "
-                f"[{band_low}, {band_high}]"
-            )
 
 
 class TestValueRanges:
