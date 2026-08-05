@@ -61,9 +61,25 @@ class TestResolvers:
 
 
 class TestNutrientRequirements:
-    def test_returns_whole_numbers(self):
+    def test_returns_a_numeric_triple(self):
         n, p, k = nutrient_requirements("Corn", om=2.5, p_ppm=15.0, k_cmol_kg=0.3)
-        assert isinstance(n, int) and isinstance(p, int) and isinstance(k, int)
+        assert isinstance(n, float) and isinstance(p, float) and isinstance(k, float)
+
+    def test_tree_crop_rates_are_not_rounded_to_zero(self):
+        """The guide's Banana|Fruit rates are all sub-1 (e.g. 0.16, 0.05,
+        0.33) — an int() cast anywhere in this path would silently collapse
+        every real Banana recommendation to (0, 0, 0)."""
+        n, p, k = nutrient_requirements("Banana", om=1.0, p_ppm=3.0, k_cmol_kg=0.1)
+        assert n > 0 and p > 0 and k > 0
+
+    def test_boundary_value_lands_in_the_band_that_prints_it(self):
+        """The guide prints bands as '0-2.0' then '2.1-3.5' — a 0.1 gap, not
+        a continuous boundary. A value of exactly 2.0 belongs in the first
+        band ('0-2.0'), not the second."""
+        at_boundary = nutrient_requirements("Rice", om=2.0, p_ppm=3.0, k_cmol_kg=0.1, cultivation_method="Upland")[0]
+        just_over = nutrient_requirements("Rice", om=2.1, p_ppm=3.0, k_cmol_kg=0.1, cultivation_method="Upland")[0]
+        assert at_boundary == 45   # Rice|Upland's "0-2.0" band
+        assert just_over == 40     # Rice|Upland's "2.1-3.5" band
 
     def test_lower_om_increases_nitrogen(self):
         """Guide bands are descending as soil fertility improves — this is a

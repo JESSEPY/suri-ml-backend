@@ -68,14 +68,19 @@ def k_cmol_to_ppm(k_cmol_kg: float) -> float:
 @dataclass(frozen=True)
 class GuideRow:
     unit: str  # "kg_ha" or "kg_tree"
-    om_bands: tuple[tuple[float, int], ...]
-    p_bands: tuple[tuple[float, int], ...]
-    k_bands: tuple[tuple[float, int], ...]
+    om_bands: tuple[tuple[float, float], ...]
+    p_bands: tuple[tuple[float, float], ...]
+    k_bands: tuple[tuple[float, float], ...]
 
 
-def _band_value(value: float, bands: tuple[tuple[float, int], ...]) -> int:
+def _band_value(value: float, bands: tuple[tuple[float, float], ...]) -> float:
+    # Bands are printed in the guide as e.g. "0-2.0" then "2.1-3.5" -- a 0.1
+    # gap between the printed labels, not a continuous boundary. The stored
+    # `upper` is the literal printed upper bound of each band (2.0, 3.5, ...),
+    # so a value exactly AT that bound belongs to the band that prints it,
+    # not the next one up -- hence <=, not <.
     for upper, rate in bands:
-        if value < upper:
+        if value <= upper:
             return rate
     return bands[-1][1]
 
@@ -315,18 +320,25 @@ def nutrient_requirements(
     crop: str, om: float, p_ppm: float, k_cmol_kg: float,
     variety: str | None = None, cultivation_method: str | None = None,
     age_band: str | None = None,
-) -> tuple[int, int, int]:
+) -> tuple[float, float, float]:
     """Direct BSWM guide lookup: three independent band lookups (OM% -> N,
     P ppm -> P, K ppm, converted from cmol/kg -> K). Raises KeyError for an
     unknown crop or an unresolvable guide row (e.g. an age_band string this
-    crop's guide rows don't have)."""
+    crop's guide rows don't have).
+
+    Returns floats, not ints: tree-crop rates (Cacao/Coconut/Mango/Banana)
+    are legitimately sub-1 kg/tree -- e.g. every one of Banana|Fruit's bands
+    is below 1 (0.16, 0.12, ..., 0.05, 0.045, ..., 0.33, 0.23, ...). Casting
+    to int would round every one of those down to 0, silently zeroing out
+    entire crops' worth of recommendations (and, once a later task's parser
+    uses this function to build training labels, corrupting them too)."""
     if crop not in CROPS:
         raise KeyError(f"Unknown crop {crop!r}")
     key = _guide_row_key(crop, variety, cultivation_method, age_band)
     row = GUIDE_ROWS[key]
     k_ppm = k_cmol_to_ppm(k_cmol_kg)
     return (
-        int(round(_band_value(om, row.om_bands))),
-        int(round(_band_value(p_ppm, row.p_bands))),
-        int(round(_band_value(k_ppm, row.k_bands))),
+        round(float(_band_value(om, row.om_bands)), 3),
+        round(float(_band_value(p_ppm, row.p_bands)), 3),
+        round(float(_band_value(k_ppm, row.k_bands)), 3),
     )
