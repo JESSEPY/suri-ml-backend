@@ -38,9 +38,12 @@ inference.
   training rows — this is intentional, not a gap to fill later in this plan.
 - The `GOLDEN_SCC417`/`SCC-26-417-417` fixture is retired throughout (Sorghum is no longer a
   supported crop, and the record's origin was traced to a document outside this dataset).
-- Every new numeric baseline (6 new crops + 4 variety overrides) and the rescaled K-remark
-  thresholds are flagged in-code as needing agronomist/DA RSL confirmation before production use —
-  matching the convention `data/crop_baselines.py` and `ml/remarks.py` already use for their
+- Every new numeric baseline (6 new crops + 4 variety overrides) is cross-referenced against
+  Philippine DA/ATI/PCAARRD/PhilRice fertilizer recommendation documents (see `data/crop_baselines.py`'s
+  per-value source comments), though several of those source PDFs couldn't be independently
+  re-fetched and re-verified in this planning pass — still flagged for final agronomist sign-off
+  before production use, same as the rescaled K-remark thresholds, matching the convention
+  `data/crop_baselines.py` and `ml/remarks.py` already use for their
   existing placeholder values.
 - Reference spec: `docs/superpowers/specs/2026-08-05-real-soil-data-retraining-design.md`.
 
@@ -90,13 +93,22 @@ Deleted files (Task 10):
 """Per-crop and per-variety baseline nutrient requirements in kg/ha, before
 soil-test adjustment.
 
-Sourced from published Philippine DA/BSWM/PhilRice general fertilizer
-recommendation guidance. These are starting-point central tendencies, not lab
-measurements — the source spreadsheet (Region 7 National Soil Database) has
-soil chemistry, not fertilizer application outcomes, so there is no way to
-derive these numbers from data alone. They need agronomist review before any
-production use — which is why they are isolated here: correcting a value is
-a single edit plus a retrain, with no code changes anywhere else.
+Sourced from Philippine DA/ATI/PCAARRD/PhilRice fertilizer recommendation
+documents (Coconut-Cacao Intercropping Guide, HVCDP Banana Production
+Manual, BAFS-DA horticulture baseline, DA Region 1/10 Nutrient Expert and
+procurement records citing bags of 14-14-14 per hectare, DA-ATI Peanut IEC),
+plus a real BSWM Agriculturist II fertilizer-computation reference for Rice
+(Inbred). Several of the source PDFs could not be independently re-verified
+by fetching them directly (image-based/encoded/oversized) — the values below
+are taken from a human-reviewed cross-reference against those documents, not
+independently re-derived from data. These are starting-point central
+tendencies, not lab measurements — the source spreadsheet (Region 7 National
+Soil Database) has soil chemistry, not fertilizer application outcomes, so
+there is no way to derive these numbers from data alone. They still need
+final agronomist sign-off before production use — which is why they are
+isolated here: correcting a value is a single edit plus a retrain (see the
+plan's Global Constraints / Task 11 for exactly what "retrain" involves),
+with no other code changes needed.
 
 The crop list is restricted to crops with at least 20 real sole-crop lab
 samples in that source (Cabbage/Sorghum/Sugarcane were dropped for having
@@ -109,13 +121,13 @@ from __future__ import annotations
 CROP_BASELINES: dict[str, tuple[int, int, int]] = {
     "Corn": (90, 60, 60),
     "Rice": (90, 30, 30),
-    "Cassava": (70, 40, 80),
-    "Peanut": (30, 60, 60),
-    "Mango": (120, 60, 120),
-    "Cacao": (100, 50, 100),
-    "Banana": (250, 80, 350),
+    "Cassava": (56, 56, 56),      # DA National Fertilizer Recommendation: 8 bags 14-14-14/ha
+    "Peanut": (28, 34, 34),       # DA-ATI Peanut IEC: 2 bags 14-14-14/ha + P/K supplement, midpoint
+    "Mango": (120, 60, 120),      # BAFS-DA general horticulture baseline (no mango-specific PH figure found)
+    "Cacao": (135, 48, 192),      # DA-ATI Coconut-Cacao Intercropping Guide, Table B (mature trees, 1 t DFCB/ha target)
+    "Banana": (63, 18, 200),      # DA HVCDP Banana Production Manual, midpoint of 50-75/15-20/175-225 kg/ha
     "Tomato": (100, 80, 80),
-    "Coconut": (150, 50, 250),
+    "Coconut": (65, 40, 150),     # DA-ATI Coconut-Cacao Intercropping Guide: 500g N/320g P2O5/1200g K2O per palm, scaled to standard density
 }
 
 # (crop, variety) -> (base_n, base_p2o5, base_k2o) in kg/ha, overriding the
@@ -123,10 +135,13 @@ CROP_BASELINES: dict[str, tuple[int, int, int]] = {
 # varieties are consistently recommended more N than their OPV/inbred
 # counterparts, reflecting their higher yield potential.
 VARIETY_BASELINES: dict[tuple[str, str], tuple[int, int, int]] = {
-    ("Rice", "Hybrid"): (130, 40, 40),
-    ("Rice", "Inbred"): (100, 30, 30),
-    ("Corn", "OPV"): (75, 55, 55),
-    ("Corn", "Hybrid"): (130, 65, 65),
+    # Real DA report, Rice (Inbred): wet season 90/60/40, dry season 100/60/40 kg/ha — N averaged across seasons.
+    ("Rice", "Inbred"): (95, 60, 40),
+    # Real Philippine trial data on named NSIC-registered hybrid varieties (NSIC Rc442/Rc438) — N is
+    # variety-specific from that trial; P carried over from the Inbred figure (no hybrid-specific P found).
+    ("Rice", "Hybrid"): (135, 60, 40),
+    ("Corn", "OPV"): (80, 60, 30),     # DA Region 10 OPV corn figures; K estimated from a general PH corn practical guide
+    ("Corn", "Hybrid"): (165, 34, 39), # DA Region 1 Nutrient Expert for Corn (Bayambang/Sto. Tomas), midpoint of 150-180/28-40/28-50 kg/ha
 }
 
 CROPS: list[str] = sorted(CROP_BASELINES.keys())
@@ -247,7 +262,7 @@ class TestNutrientRequirements:
         assert without_variety == with_variety
 
     def test_known_variety_overrides_the_crop_baseline(self):
-        """Hybrid rice's baseline (130, 40, 40) differs from plain Rice's
+        """Hybrid rice's baseline (135, 60, 40) differs from plain Rice's
         (90, 30, 30) — at the same soil-test inputs, the two must diverge."""
         plain = nutrient_requirements("Rice", 6.5, 2.5, 15.0, 120.0)
         hybrid = nutrient_requirements("Rice", 6.5, 2.5, 15.0, 120.0, variety="Hybrid")
