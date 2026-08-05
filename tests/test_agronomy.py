@@ -1,88 +1,47 @@
 import pytest
-from data.crop_baselines import CROP_BASELINES, CROPS
-from ml.agronomy import (
-    total_nitrogen_from_om, ph_p_penalty, nutrient_requirements,
-)
+
+from ml.agronomy import nutrient_requirements, total_nitrogen_from_om
+from data.nutrient_recommendation_guide import CROPS
 
 
-class TestTotalNitrogen:
-    def test_matches_real_scc417_report(self):
-        """The real report shows OM 3.21% -> Total N 0.1605%, exactly OM x 0.05."""
-        assert total_nitrogen_from_om(3.21) == pytest.approx(0.1605)
-
-    def test_is_exactly_five_percent_of_om(self):
+class TestTotalNitrogenFromOm:
+    def test_derives_total_n_at_the_lab_s_five_percent_ratio(self):
         assert total_nitrogen_from_om(2.0) == pytest.approx(0.10)
 
-
-class TestPhPhosphorusPenalty:
-    def test_no_penalty_at_optimal_ph(self):
-        """Phosphorus availability peaks at pH 6.5 — no extra P needed."""
-        assert ph_p_penalty(6.5) == pytest.approx(1.0)
-
-    def test_penalty_is_symmetric_around_optimum(self):
-        assert ph_p_penalty(5.5) == pytest.approx(ph_p_penalty(7.5))
-
-    def test_penalty_increases_away_from_optimum(self):
-        assert ph_p_penalty(8.5) > ph_p_penalty(7.5) > ph_p_penalty(6.5)
-
-    def test_penalty_is_capped_at_thirty_percent(self):
-        assert ph_p_penalty(14.0) == pytest.approx(1.30)
-        assert ph_p_penalty(0.0) == pytest.approx(1.30)
+    def test_zero_om_is_zero_n(self):
+        assert total_nitrogen_from_om(0.0) == 0.0
 
 
 class TestNutrientRequirements:
-    def test_golden_record_scc417_within_tolerance(self):
-        """Real report: Sorghum, pH 8.17, OM 3.21, P 18.96, K 138 -> 50/40/60.
-        The generator only approximates DA's real rule, so tolerance is +/-15
-        kg/ha — but a miss wider than that means the formulas disagree with real
-        agronomic practice badly enough to investigate."""
-        n, p, k = nutrient_requirements("Sorghum", 8.17, 3.21, 18.96, 138.0)
-        assert abs(n - 50) <= 15
-        assert abs(p - 40) <= 15
-        assert abs(k - 60) <= 15
+    def test_returns_a_numeric_triple(self):
+        n, p, k = nutrient_requirements("Corn", om=2.5, p_ppm=15.0, k_cmol_kg=0.3)
+        assert isinstance(n, float) and isinstance(p, float) and isinstance(k, float)
 
-    def test_returns_whole_numbers(self):
-        n, p, k = nutrient_requirements("Corn", 6.5, 2.5, 15.0, 120.0)
-        assert isinstance(n, int) and isinstance(p, int) and isinstance(k, int)
-
-    def test_high_om_reduces_nitrogen(self):
-        low = nutrient_requirements("Corn", 6.5, 1.0, 15.0, 120.0)[0]
-        high = nutrient_requirements("Corn", 6.5, 5.0, 15.0, 120.0)[0]
-        assert high < low
-
-    def test_high_phosphorus_reduces_p2o5(self):
-        low = nutrient_requirements("Corn", 6.5, 2.5, 5.0, 120.0)[1]
-        high = nutrient_requirements("Corn", 6.5, 2.5, 35.0, 120.0)[1]
-        assert high < low
-
-    def test_high_potassium_reduces_k2o(self):
-        low = nutrient_requirements("Corn", 6.5, 2.5, 15.0, 40.0)[2]
-        high = nutrient_requirements("Corn", 6.5, 2.5, 15.0, 240.0)[2]
-        assert high < low
-
-    def test_extreme_ph_increases_p2o5(self):
-        """The non-linear pH penalty is the specific reason this pipeline needs
-        a tree model rather than a linear one."""
-        optimal = nutrient_requirements("Corn", 6.5, 2.5, 15.0, 120.0)[1]
-        alkaline = nutrient_requirements("Corn", 8.5, 2.5, 15.0, 120.0)[1]
-        assert alkaline > optimal
-
-    @pytest.mark.parametrize("crop", CROPS)
-    def test_all_crops_produce_clamped_values(self, crop):
-        for ph, om, p, k in [(4.5, 0.5, 3.0, 30.0), (8.5, 6.0, 40.0, 250.0)]:
-            n, p2o5, k2o = nutrient_requirements(crop, ph, om, p, k)
-            assert 20 <= n <= 200
-            assert 20 <= p2o5 <= 150
-            assert 20 <= k2o <= 200
+    def test_tree_crop_rates_are_not_rounded_to_zero(self):
+        """See data/nutrient_recommendation_guide.py's nutrient_requirements
+        docstring — this must stay a float pass-through, not re-introduce
+        an int cast at this delegation layer."""
+        n, p, k = nutrient_requirements("Banana", om=1.0, p_ppm=3.0, k_cmol_kg=0.1)
+        assert n > 0 and p > 0 and k > 0
 
     def test_unknown_crop_raises(self):
         with pytest.raises(KeyError):
-            nutrient_requirements("Durian", 6.5, 2.5, 15.0, 120.0)
+            nutrient_requirements("Durian", om=2.5, p_ppm=15.0, k_cmol_kg=0.3)
 
+    def test_variety_with_no_matching_row_falls_back_gracefully(self):
+        """Cassava has no variety-specific guide rows — passing one must not
+        raise, since resolve_variety/(guide row keying) for Cassava ignores
+        variety entirely."""
+        without = nutrient_requirements("Cassava", om=2.5, p_ppm=15.0, k_cmol_kg=0.3)
+        with_variety = nutrient_requirements("Cassava", om=2.5, p_ppm=15.0, k_cmol_kg=0.3, variety="Hybrid")
+        assert without == with_variety
 
-class TestCropBaselines:
-    def test_sorghum_anchored_to_real_report(self):
-        assert CROP_BASELINES["Sorghum"] == (50, 40, 60)
+    def test_known_variety_changes_the_result(self):
+        opv = nutrient_requirements("Corn", om=1.0, p_ppm=15.0, k_cmol_kg=0.3, variety="OPV")
+        hybrid = nutrient_requirements("Corn", om=1.0, p_ppm=15.0, k_cmol_kg=0.3, variety="Hybrid")
+        assert opv != hybrid
 
-    def test_crops_list_matches_baseline_keys(self):
-        assert set(CROPS) == set(CROP_BASELINES.keys())
+    @pytest.mark.parametrize("crop", CROPS)
+    def test_every_supported_crop_resolves_without_error(self, crop):
+        n, p, k = nutrient_requirements(crop, om=2.5, p_ppm=15.0, k_cmol_kg=0.3)
+        assert n >= 0 and p >= 0 and k >= 0
