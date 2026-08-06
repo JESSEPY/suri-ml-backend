@@ -119,7 +119,11 @@ Deleted files (Task 11):
   `target_unit_for_crop(crop: str) -> str`, `resolve_variety(crop, variety) -> str`,
   `resolve_cultivation_method(crop, cultivation_method) -> str`,
   `resolve_age_band(crop, age_band) -> str`,
-  `nutrient_requirements(crop: str, om: float, p_ppm: float, k_cmol_kg: float, variety: str | None = None, cultivation_method: str | None = None, age_band: str | None = None) -> tuple[int, int, int]`.
+  `nutrient_requirements(crop: str, om: float, p_ppm: float, k_cmol_kg: float, variety: str | None = None, cultivation_method: str | None = None, age_band: str | None = None) -> tuple[float, float, float]`.
+  **Returns floats, not ints** — tree-crop rates (Cacao/Coconut/Mango/Banana) are legitimately
+  sub-1 kg/tree; rounding to whole `int` would collapse most of them to `0`, silently corrupting
+  both live predictions and every training label built from them (see Task 1 Step 3's fix
+  history for the specific case this caught).
   Consumed by Task 2 (`ml/agronomy.py`), Task 5 (`ml/preprocessing.py`'s category lists), Task 6
   (`main.py`), Task 9 (parser).
 
@@ -198,9 +202,31 @@ class TestResolvers:
 
 
 class TestNutrientRequirements:
-    def test_returns_whole_numbers(self):
+    def test_returns_a_numeric_triple(self):
         n, p, k = nutrient_requirements("Corn", om=2.5, p_ppm=15.0, k_cmol_kg=0.3)
-        assert isinstance(n, int) and isinstance(p, int) and isinstance(k, int)
+        assert isinstance(n, float) and isinstance(p, float) and isinstance(k, float)
+
+    def test_tree_crop_rates_are_not_rounded_to_zero(self):
+        """The guide's Banana|Fruit rates are all sub-1 (e.g. 0.16, 0.05,
+        0.33) — an int() cast anywhere in this path would silently collapse
+        every real Banana recommendation to (0, 0, 0). This is the specific
+        regression a review caught in the first implementation of this
+        file: nutrient_requirements() rounded to int, and Banana always
+        returned zeros no matter the input."""
+        n, p, k = nutrient_requirements("Banana", om=1.0, p_ppm=3.0, k_cmol_kg=0.1)
+        assert n > 0 and p > 0 and k > 0
+
+    def test_boundary_value_lands_in_the_band_that_prints_it(self):
+        """The guide prints bands as '0-2.0' then '2.1-3.5' — a 0.1 gap, not
+        a continuous boundary. A value of exactly 2.0 belongs in the first
+        band ('0-2.0'), not the second. This is the specific regression a
+        review caught: the first implementation used a strict '<' test
+        against the literal printed upper bounds, which puts an exact 2.0
+        into the '2.1-3.5' band instead."""
+        at_boundary = nutrient_requirements("Rice", om=2.0, p_ppm=3.0, k_cmol_kg=0.1, cultivation_method="Upland")[0]
+        just_over = nutrient_requirements("Rice", om=2.1, p_ppm=3.0, k_cmol_kg=0.1, cultivation_method="Upland")[0]
+        assert at_boundary == 45   # Rice|Upland's "0-2.0" band
+        assert just_over == 40     # Rice|Upland's "2.1-3.5" band
 
     def test_lower_om_increases_nitrogen(self):
         """Guide bands are descending as soil fertility improves — this is a
@@ -308,14 +334,19 @@ def k_cmol_to_ppm(k_cmol_kg: float) -> float:
 @dataclass(frozen=True)
 class GuideRow:
     unit: str  # "kg_ha" or "kg_tree"
-    om_bands: tuple[tuple[float, int], ...]
-    p_bands: tuple[tuple[float, int], ...]
-    k_bands: tuple[tuple[float, int], ...]
+    om_bands: tuple[tuple[float, float], ...]
+    p_bands: tuple[tuple[float, float], ...]
+    k_bands: tuple[tuple[float, float], ...]
 
 
-def _band_value(value: float, bands: tuple[tuple[float, int], ...]) -> int:
+def _band_value(value: float, bands: tuple[tuple[float, float], ...]) -> float:
+    """bands is an ascending list of (upper_bound, rate). The guide prints
+    ranges with a 0.1 gap ("0-2.0" then "2.1-3.5", or "0-35" then "36-55"
+    for the integer-scaled K bands) — the printed upper bound is inclusive
+    of its own band, not a shared continuous boundary. <=, not <, is what
+    makes a value of exactly 2.0 land in "0-2.0" rather than "2.1-3.5"."""
     for upper, rate in bands:
-        if value < upper:
+        if value <= upper:
             return rate
     return bands[-1][1]
 
@@ -537,20 +568,28 @@ def nutrient_requirements(
     crop: str, om: float, p_ppm: float, k_cmol_kg: float,
     variety: str | None = None, cultivation_method: str | None = None,
     age_band: str | None = None,
-) -> tuple[int, int, int]:
+) -> tuple[float, float, float]:
     """Direct BSWM guide lookup: three independent band lookups (OM% -> N,
     P ppm -> P, K ppm, converted from cmol/kg -> K). Raises KeyError for an
     unknown crop or an unresolvable guide row (e.g. an age_band string this
-    crop's guide rows don't have)."""
+    crop's guide rows don't have).
+
+    Returns floats, not ints: tree-crop rates (Cacao/Coconut/Mango/Banana)
+    are legitimately sub-1 kg/tree. Rounding to a whole int here would
+    collapse most tree-crop rates to 0 -- verified concretely for
+    Banana|Fruit, whose entire band set is < 1, so an int cast makes every
+    possible Banana call return (0, 0, 0). Rounded to 3 decimal places,
+    matching main.py's existing display rounding and the guide's own
+    precision (its smallest printed values have 3 decimal digits)."""
     if crop not in CROPS:
         raise KeyError(f"Unknown crop {crop!r}")
     key = _guide_row_key(crop, variety, cultivation_method, age_band)
     row = GUIDE_ROWS[key]
     k_ppm = k_cmol_to_ppm(k_cmol_kg)
     return (
-        int(round(_band_value(om, row.om_bands))),
-        int(round(_band_value(p_ppm, row.p_bands))),
-        int(round(_band_value(k_ppm, row.k_bands))),
+        round(_band_value(om, row.om_bands), 3),
+        round(_band_value(p_ppm, row.p_bands), 3),
+        round(_band_value(k_ppm, row.k_bands), 3),
     )
 ```
 
@@ -588,7 +627,7 @@ git commit -m "feat: add transcribed BSWM Nutrient Recommendation Guide table an
 
 **Interfaces:**
 - Consumes: `nutrient_requirements`, `CROPS` (Task 1, `data.nutrient_recommendation_guide`).
-- Produces: `nutrient_requirements(crop, om, p_ppm, k_cmol_kg, variety=None, cultivation_method=None, age_band=None) -> tuple[int, int, int]` (same name, now re-exported from `ml.agronomy` so every existing `from ml.agronomy import nutrient_requirements` call site keeps working), `total_nitrogen_from_om(om: float) -> float` (unchanged, still needed — the lab derives Total N from OM, unrelated to fertilizer targets). Consumed by Task 5 (`tests/fixtures.py`), Task 6 (`main.py`), Task 9 (parser).
+- Produces: `nutrient_requirements(crop, om, p_ppm, k_cmol_kg, variety=None, cultivation_method=None, age_band=None) -> tuple[float, float, float]` (same name, now re-exported from `ml.agronomy` so every existing `from ml.agronomy import nutrient_requirements` call site keeps working), `total_nitrogen_from_om(om: float) -> float` (unchanged, still needed — the lab derives Total N from OM, unrelated to fertilizer targets). Consumed by Task 5 (`tests/fixtures.py`), Task 6 (`main.py`), Task 9 (parser).
 
 **Context:** the old `ph_p_penalty()` function and the `N_MIN`/`N_MAX`/`P_MIN`/`P_MAX`/`K_MIN`/`K_MAX`/`_clamp` machinery are all removed — they existed to shape an invented formula's output into a plausible range; the guide's own table values are already realistic and need no clamping. `ph` is no longer a `nutrient_requirements()` parameter (see Global Constraints).
 
@@ -612,9 +651,16 @@ class TestTotalNitrogenFromOm:
 
 
 class TestNutrientRequirements:
-    def test_returns_whole_numbers(self):
+    def test_returns_a_numeric_triple(self):
         n, p, k = nutrient_requirements("Corn", om=2.5, p_ppm=15.0, k_cmol_kg=0.3)
-        assert isinstance(n, int) and isinstance(p, int) and isinstance(k, int)
+        assert isinstance(n, float) and isinstance(p, float) and isinstance(k, float)
+
+    def test_tree_crop_rates_are_not_rounded_to_zero(self):
+        """See data/nutrient_recommendation_guide.py's nutrient_requirements
+        docstring — this must stay a float pass-through, not re-introduce
+        an int cast at this delegation layer."""
+        n, p, k = nutrient_requirements("Banana", om=1.0, p_ppm=3.0, k_cmol_kg=0.1)
+        assert n > 0 and p > 0 and k > 0
 
     def test_unknown_crop_raises(self):
         with pytest.raises(KeyError):
@@ -676,11 +722,12 @@ def nutrient_requirements(
     crop: str, om: float, p_ppm: float, k_cmol_kg: float,
     variety: str | None = None, cultivation_method: str | None = None,
     age_band: str | None = None,
-) -> tuple[int, int, int]:
-    """Return (n, p2o5, k2o) in whole units — kg/ha for field crops, kg/tree
-    for Coconut/Cacao/Mango/Banana (see
-    data.nutrient_recommendation_guide.target_unit_for_crop). Raises
-    KeyError for an unknown crop."""
+) -> tuple[float, float, float]:
+    """Return (n, p2o5, k2o) — kg/ha for field crops, kg/tree for
+    Coconut/Cacao/Mango/Banana (see
+    data.nutrient_recommendation_guide.target_unit_for_crop). Floats, not
+    ints: several tree-crop rates are sub-1 kg/tree. Raises KeyError for an
+    unknown crop."""
     return _guide_lookup(
         crop, om, p_ppm, k_cmol_kg,
         variety=variety, cultivation_method=cultivation_method, age_band=age_band,
@@ -2466,7 +2513,8 @@ class TestBuildTrainingRow:
         assert row["age_band"] == "None"
         assert row["om_remark"] == "MODERATELY LOW"
         assert row["target_unit"] == "kg_ha"
-        assert isinstance(row["target_n"], int)
+        assert isinstance(row["target_n"], float)
+        assert row["target_n"] > 0
 
     def test_k_remark_uses_the_converted_ppm_not_the_raw_cmol_kg(self):
         """0.35 cmol/kg -> 136.85 ppm -> SUFFICIENT+. Feeding the raw 0.35
