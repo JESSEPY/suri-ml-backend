@@ -198,7 +198,17 @@ def train(frame: pd.DataFrame, output_dir: str | None = None, seed: int = RANDOM
 
 def _load_frame(csv_path: str | None) -> pd.DataFrame:
     if csv_path:
-        return pd.read_csv(csv_path)
+        # keep_default_na=False + explicit na_values=[""]: several of this
+        # schema's nominal columns (variety/cultivation_method/age_band) use
+        # the literal string "None" as a real, valid category (see
+        # ml/preprocessing.py's VARIETIES/CULTIVATION_METHODS/AGE_BANDS) --
+        # pandas' default NA-sniffing would otherwise silently read that
+        # text as NaN, corrupting the category and tripping the encoder's
+        # deliberate handle_unknown="error" on load. An actually-missing
+        # numeric cell (e.g. an ungraded organic_matter_pct) is written by
+        # csv.DictWriter as a genuinely empty cell, which na_values=[""]
+        # still correctly treats as NaN.
+        return pd.read_csv(csv_path, keep_default_na=False, na_values=[""])
     from data.ingest_to_supabase import TABLE, get_client
     rows = get_client().table(TABLE).select("*").execute().data
     return pd.DataFrame(rows)

@@ -1,10 +1,11 @@
 import json
 import numpy as np
+import pandas as pd
 import pytest
 
 from tests.fixtures import sample_training_frame
 from ml.preprocessing import FEATURE_COLUMNS, TARGET_COLUMNS
-from ml.train import grouped_split, cv_weights, train
+from ml.train import grouped_split, cv_weights, train, _load_frame
 
 
 @pytest.fixture(scope="module")
@@ -117,3 +118,43 @@ class TestTrain:
         X = preprocessor.transform(frame[FEATURE_COLUMNS])
         predicted = regressor.predict(X)
         assert np.all(predicted >= 0)
+
+
+class TestLoadFrameCsvNoneSentinel:
+    """Regression test: data/parse_real_soil_database.py writes the literal
+    4-character string "None" into variety/cultivation_method/age_band as a
+    deliberate sentinel category (see ml/preprocessing.py's
+    VARIETIES/CULTIVATION_METHODS/AGE_BANDS). Plain pd.read_csv() silently
+    sniffs that text as a missing value and turns it into NaN, which then
+    trips OneHotEncoder(handle_unknown="error") downstream. _load_frame()
+    must round-trip the literal string, while still treating a genuinely
+    blank numeric cell as missing.
+    """
+
+    @pytest.fixture(scope="class")
+    def csv_path(self, tmp_path_factory):
+        frame = sample_training_frame(num_records=5, seed=7)
+        frame = frame.copy()
+        frame.loc[0, "variety"] = "None"
+        frame.loc[0, "cultivation_method"] = "None"
+        frame.loc[0, "age_band"] = "None"
+        # A genuinely missing optional numeric cell -- e.g. an ungraded
+        # organic_matter_pct -- must still round-trip as NaN.
+        frame.loc[1, "organic_matter_pct"] = np.nan
+
+        path = tmp_path_factory.mktemp("data") / "sentinel.csv"
+        frame.to_csv(path, index=False)
+        return str(path)
+
+    def test_literal_none_string_survives_as_string(self, csv_path):
+        loaded = _load_frame(csv_path)
+        assert loaded.loc[0, "variety"] == "None"
+        assert not pd.isna(loaded.loc[0, "variety"])
+        assert loaded.loc[0, "cultivation_method"] == "None"
+        assert not pd.isna(loaded.loc[0, "cultivation_method"])
+        assert loaded.loc[0, "age_band"] == "None"
+        assert not pd.isna(loaded.loc[0, "age_band"])
+
+    def test_genuinely_blank_numeric_cell_still_reads_as_nan(self, csv_path):
+        loaded = _load_frame(csv_path)
+        assert pd.isna(loaded.loc[1, "organic_matter_pct"])
