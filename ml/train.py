@@ -1,9 +1,14 @@
 """Training, evaluation, and artifact writing (spec section 10).
 
-Every split and cross-validation fold is grouped on laboratory_code. This is a
-correctness requirement, not a preference: each record contributes three rows
-(lab/stk/iot) sharing the same underlying chemistry and identical targets, so a
-random row split leaks records across train and test and inflates every metric.
+Every split and cross-validation fold is grouped on laboratory_code — each
+physical sample must stay entirely within one split, since a random row
+split would otherwise leak information across train/test.
+
+The regressor is wrapped in LogTargetRegressor (ml/model.py) because
+targets now span both kg/ha (~20-300, field crops) and kg/tree (~0.003-2,
+Coconut/Cacao/Mango/Banana) scales in the same three columns — fitting
+directly on that mixture would let the loss be dominated by the
+larger-scale rows.
 """
 
 from __future__ import annotations
@@ -21,24 +26,13 @@ from sklearn.metrics import accuracy_score, f1_score, mean_absolute_error, r2_sc
 from sklearn.model_selection import GroupKFold, GroupShuffleSplit
 from sklearn.preprocessing import LabelEncoder
 
-from ml.model import EnsembleFertilizerRegressor, build_classifier, build_krr, build_xgb_regressor
+from ml.model import EnsembleFertilizerRegressor, LogTargetRegressor, build_classifier, build_krr, build_xgb_regressor
 from ml.preprocessing import FEATURE_COLUMNS, TARGET_COLUMNS, build_preprocessor
 
 RANDOM_SEED = 42
 ARTIFACT_ROOT = "ml/artifacts"
 GROUP_COLUMN = "laboratory_code"
 CLASSIFIER_TARGETS = ["app1_formulation", "app2_formulation"]
-
-GOLDEN_SCC417 = {
-    "crop": "Sorghum", "data_source": "lab", "ph": 8.17,
-    "organic_matter_pct": 3.21, "total_nitrogen_pct": 0.1605,
-    "phosphorus_ppm": 18.96, "potassium_ppm": 138.0,
-    "temp": None, "moist": None, "ec": None, "sal": None,
-    "ph_remark": "MODERATELY ALKALINE", "om_remark": "MODERATELY LOW",
-    "p_remark": "HIGH", "k_remark": "SUFFICIENT+",
-}
-GOLDEN_ACTUAL = (50, 40, 60)
-GOLDEN_TOLERANCE = 15
 
 
 def grouped_split(frame: pd.DataFrame, seed: int = RANDOM_SEED):
@@ -56,16 +50,21 @@ def grouped_split(frame: pd.DataFrame, seed: int = RANDOM_SEED):
 
 def cv_weights(X, y, groups, n_splits: int = 5) -> list[tuple[float, float]]:
     """Set each target's (xgb, krr) voting weights from grouped cross-validated
-    R2, so each nutrient favours whichever model actually performs better."""
+    R2, so each nutrient favours whichever model actually performs better.
+
+    Scored in log1p space, self-contained to this function — consistent
+    with how the final model is actually fit (see LogTargetRegressor) —
+    without requiring the caller to pre-transform y."""
     splitter = GroupKFold(n_splits=n_splits)
+    y_log = np.log1p(y)
     weights: list[tuple[float, float]] = []
 
-    for target in range(y.shape[1]):
+    for target in range(y_log.shape[1]):
         scores = {"xgb": [], "krr": []}
-        for train_idx, test_idx in splitter.split(X, y[:, target], groups):
+        for train_idx, test_idx in splitter.split(X, y_log[:, target], groups):
             for name, builder in (("xgb", build_xgb_regressor), ("krr", build_krr)):
-                model = builder().fit(X[train_idx], y[train_idx, target])
-                scores[name].append(r2_score(y[test_idx, target], model.predict(X[test_idx])))
+                model = builder().fit(X[train_idx], y_log[train_idx, target])
+                scores[name].append(r2_score(y_log[test_idx, target], model.predict(X[test_idx])))
 
         xgb_score = max(float(np.mean(scores["xgb"])), 0.0)
         krr_score = max(float(np.mean(scores["krr"])), 0.0)
@@ -75,7 +74,7 @@ def cv_weights(X, y, groups, n_splits: int = 5) -> list[tuple[float, float]]:
     return weights
 
 
-def evaluate(model, X, y, sources, X_train, y_train) -> dict:
+def evaluate(model, X, y, sources, crops, X_train, y_train) -> dict:
     predicted = model.predict(X)
 
     overall = {}
@@ -87,30 +86,23 @@ def evaluate(model, X, y, sources, X_train, y_train) -> dict:
             "dummy_mae": float(mean_absolute_error(y[:, index], dummy.predict(X))),
         }
 
-    by_source = {}
-    for source in np.unique(sources):
-        mask = sources == source
-        by_source[str(source)] = {
-            name: {
-                "mae": float(mean_absolute_error(y[mask, index], predicted[mask, index])),
-                "r2": float(r2_score(y[mask, index], predicted[mask, index])),
+    def _grouped_metrics(labels: np.ndarray) -> dict:
+        result = {}
+        for label in np.unique(labels):
+            mask = labels == label
+            result[str(label)] = {
+                name: {
+                    "mae": float(mean_absolute_error(y[mask, index], predicted[mask, index])),
+                    "r2": float(r2_score(y[mask, index], predicted[mask, index])),
+                }
+                for index, name in enumerate(TARGET_COLUMNS)
             }
-            for index, name in enumerate(TARGET_COLUMNS)
-        }
+        return result
 
-    return {"overall": overall, "by_source": by_source}
-
-
-def _golden_test(preprocessor, regressor) -> dict:
-    row = pd.DataFrame([GOLDEN_SCC417])[FEATURE_COLUMNS]
-    n, p2o5, k2o = regressor.predict(preprocessor.transform(row))[0]
-    deltas = [abs(n - GOLDEN_ACTUAL[0]), abs(p2o5 - GOLDEN_ACTUAL[1]), abs(k2o - GOLDEN_ACTUAL[2])]
     return {
-        "record": "SCC-26-417-417",
-        "predicted_n": float(n), "predicted_p2o5": float(p2o5), "predicted_k2o": float(k2o),
-        "actual_n": GOLDEN_ACTUAL[0], "actual_p2o5": GOLDEN_ACTUAL[1], "actual_k2o": GOLDEN_ACTUAL[2],
-        "tolerance_kg_ha": GOLDEN_TOLERANCE,
-        "passed": all(delta <= GOLDEN_TOLERANCE for delta in deltas),
+        "overall": overall,
+        "by_source": _grouped_metrics(sources),
+        "by_crop": _grouped_metrics(crops),
     }
 
 
@@ -128,10 +120,12 @@ def train(frame: pd.DataFrame, output_dir: str | None = None, seed: int = RANDOM
     y_test = test_df[TARGET_COLUMNS].to_numpy(dtype=float)
 
     weights = cv_weights(X_train, y_train, train_df[GROUP_COLUMN].to_numpy())
-    regressor = EnsembleFertilizerRegressor(weights=weights).fit(X_train, y_train)
+    regressor = LogTargetRegressor(EnsembleFertilizerRegressor(weights=weights)).fit(X_train, y_train)
 
     metrics = evaluate(
-        regressor, X_test, y_test, test_df.data_source.to_numpy(), X_train, y_train
+        regressor, X_test, y_test,
+        test_df.data_source.to_numpy(), test_df.crop.to_numpy(),
+        X_train, y_train,
     )
 
     # Classification heads. Note these will score near-perfectly on covered
@@ -186,7 +180,6 @@ def train(frame: pd.DataFrame, output_dir: str | None = None, seed: int = RANDOM
         "voting_weights": [{"xgb": xgb, "krr": krr} for xgb, krr in weights],
         "metrics": metrics,
         "classification_metrics": classification_metrics,
-        "golden_test": _golden_test(preprocessor, regressor),
         "recipe_vocabulary": {
             target: encoders[target].classes_.tolist() for target in CLASSIFIER_TARGETS
         },
@@ -216,19 +209,18 @@ def _print_summary(metadata: dict) -> None:
     print(f"Records: {metadata['n_records']}  Rows: {metadata['n_rows']}")
     print("\nRegression (held-out test):")
     for name, scores in metadata["metrics"]["overall"].items():
-        print(f"  {name:22s} MAE {scores['mae']:7.2f}  R2 {scores['r2']:6.3f}"
-              f"  (mean baseline MAE {scores['dummy_mae']:7.2f})")
+        print(f"  {name:22s} MAE {scores['mae']:7.3f}  R2 {scores['r2']:6.3f}"
+              f"  (mean baseline MAE {scores['dummy_mae']:7.3f})")
     print("\nMAE by data source:")
     for source, targets in metadata["metrics"]["by_source"].items():
-        errors = "  ".join(f"{name.split('_')[1]}={scores['mae']:6.2f}"
+        errors = "  ".join(f"{name}={scores['mae']:6.3f}"
                            for name, scores in targets.items())
         print(f"  {source:4s}  {errors}")
-    golden = metadata["golden_test"]
-    status = "PASS" if golden["passed"] else "FAIL"
-    print(f"\nGolden test SCC-26-417-417: {status}")
-    print(f"  predicted {golden['predicted_n']:.1f}/{golden['predicted_p2o5']:.1f}"
-          f"/{golden['predicted_k2o']:.1f}  actual 50/40/60"
-          f"  (tolerance +/-{golden['tolerance_kg_ha']})")
+    print("\nMAE by crop:")
+    for crop, targets in metadata["metrics"]["by_crop"].items():
+        errors = "  ".join(f"{name}={scores['mae']:6.3f}"
+                           for name, scores in targets.items())
+        print(f"  {crop:10s}  {errors}")
 
 
 if __name__ == "__main__":

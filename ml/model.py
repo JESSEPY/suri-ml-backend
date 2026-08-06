@@ -99,7 +99,12 @@ class LogTargetRegressor:
         return self
 
     def predict(self, X):
-        return np.expm1(self._base.predict(X))
+        # Clip at 0: every real target in this system (kg/ha or kg/tree) is
+        # physically >= 0, but the wrapped regressors have no such
+        # constraint -- on held-out points near zero, XGB/KRR can each
+        # predict a small negative value in log1p-space, which expm1 would
+        # otherwise pass through as a negative amount.
+        return np.maximum(0.0, np.expm1(self._base.predict(X)))
 
     @property
     def models_(self):
