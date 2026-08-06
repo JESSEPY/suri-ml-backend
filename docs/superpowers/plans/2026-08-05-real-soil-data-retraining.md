@@ -67,8 +67,13 @@ training/model impact.
 - The `GOLDEN_SCC417`/`SCC-26-417-417` fixture is retired throughout (Sorghum is no longer a
   supported crop, and the record's origin was traced to a document outside this dataset). It is
   **replaced**, not just deleted: `data/nutrient_recommendation_guide.py` gets its own
-  golden-record checks against the two worked examples in `Fertilizer Computation Guide.pptx`
-  (Coffee, Rice-Inbred) — see Task 1.
+  golden-record checks against the worked examples in `Fertilizer Computation Guide.pptx` — see
+  Task 1. **Amended after the final whole-branch review** (see
+  `docs/superpowers/plans/2026-08-06-final-review-fixes.md` Task 6): only the Rice-Inbred check was
+  ultimately implemented. The planned Coffee cross-check was abandoned — Coffee's transcribed guide
+  row is in kg/tree, the pptx's worked example is labeled kg/ha, and reconciling the two needs an
+  assumed coffee planting density this project never sourced; forcing a check on an unsourced
+  assumption wouldn't have verified anything.
 - **The transcribed guide table is a best-effort reading of a scanned, imperfectly-OCR'd PDF
   table and has at least one known unresolved discrepancy** (documented inline in Task 1): the
   Rice-Inbred golden check does not cleanly match a single guide band on all three nutrients

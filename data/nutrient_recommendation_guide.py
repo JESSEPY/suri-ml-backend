@@ -42,6 +42,17 @@ same 60/45/30/{0 or 20}/0 rate set) was NOT resolved by this re-check: the
 re-verified PDF values confirm 40 genuinely does not appear in the source
 table, so the discrepancy is real and unexplained by transcription error,
 not an artifact of a bad transcription. See that test's docstring.
+
+A second planned golden-record check, against the pptx's Coffee worked
+example (90/60/40, labeled kg/ha), was abandoned rather than forced: this
+guide's Coffee row is in kg/tree (Coffee isn't a supported crop and its row
+existed solely for this cross-check), and reconciling kg/tree against a
+kg/ha-labeled worked example requires an assumed coffee planting density
+this project never sourced. A check built on an assumed, unsourced density
+wouldn't actually verify the transcription, so the dead row was removed
+instead of kept around unused. See
+docs/superpowers/plans/2026-08-05-real-soil-data-retraining.md's amended
+Global Constraint on this point.
 """
 
 from __future__ import annotations
@@ -114,9 +125,10 @@ VARIETIES_BY_CROP: dict[str, tuple[str, ...]] = {
 # Guide row key -> GuideRow. Keys: bare crop name for crops the guide
 # doesn't further split (Cassava, Peanut, Tomato, Banana); "{crop}|{axis
 # value}" for Rice (cultivation_method), Corn (Native/Hybrid), and the
-# age-banded tree crops (Coconut/Cacao/Mango). "Coffee|..." rows are
-# included solely for the pptx golden-record cross-check -- Coffee is not
-# in CROPS and is never reachable through nutrient_requirements().
+# age-banded tree crops (Coconut/Cacao/Mango). A planned "Coffee|..." row,
+# included solely for a pptx golden-record cross-check, was removed --
+# Coffee was never in CROPS, and the cross-check itself was abandoned as
+# unverifiable (see the module docstring above).
 GUIDE_ROWS: dict[str, GuideRow] = {
     "Rice|Upland": GuideRow(
         "kg_ha",
@@ -273,15 +285,6 @@ GUIDE_ROWS: dict[str, GuideRow] = {
         om_bands=((2.0, 0.16), (3.5, 0.12), (4.5, 0.09), (5.5, 0.04), (float("inf"), 0)),
         p_bands=((6.0, 0.05), (10.0, 0.045), (15.0, 0.04), (20.0, 0.035), (float("inf"), 0)),
         k_bands=((35.0, 0.33), (55.0, 0.23), (250.0, 0.13), (300.0, 0.08), (float("inf"), 0)),
-    ),
-    # Coffee: golden-record reference only (Fertilizer Computation Guide.pptx),
-    # not a supported crop -- unreachable via nutrient_requirements(), whose
-    # crop param is validated against CROPS well before any GUIDE_ROWS lookup.
-    "Coffee|Over 15yrs": GuideRow(
-        "kg_tree",
-        om_bands=((2.0, 0.165), (3.5, 0.10), (4.5, 0.07), (5.5, 0.05), (float("inf"), 0)),
-        p_bands=((6.0, 0.10), (10.0, 0.065), (15.0, 0.04), (20.0, 0.02), (float("inf"), 0)),
-        k_bands=((35.0, 0.30), (55.0, 0.20), (250.0, 0.06), (300.0, 0), (float("inf"), 0)),
     ),
 }
 
