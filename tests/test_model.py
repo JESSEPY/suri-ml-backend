@@ -105,6 +105,28 @@ class TestLogTargetRegressor:
         wrapped = LogTargetRegressor(EnsembleFertilizerRegressor()).fit(X, y)
         assert len(wrapped.models_) == 3
 
+    def test_clips_a_negative_log_space_prediction_to_zero(self):
+        """Isolates the clip in predict(): a base regressor that predicts a
+        fixed, guaranteed-negative value in log1p-space (as XGB/KRR can do
+        on held-out points near zero -- see ml/model.py's LogTargetRegressor
+        docstring/comment) must come back as exactly 0.0, not a small
+        negative expm1'd number. expm1(-0.1) ~= -0.095, which real targets
+        (always physically >= 0) can never actually be."""
+        from ml.model import LogTargetRegressor
+
+        class NegativeStubRegressor:
+            def fit(self, X, y):
+                return self
+
+            def predict(self, X):
+                return np.full((X.shape[0], 3), -0.1)
+
+        X = RNG.uniform(-1, 1, size=(10, 3))
+        y = RNG.uniform(1, 5, size=(10, 3))  # arbitrary; stub ignores it
+        wrapped = LogTargetRegressor(NegativeStubRegressor()).fit(X, y)
+        predicted = wrapped.predict(X)
+        assert np.all(predicted == 0.0)
+
 
 class TestComponentBuilders:
     def test_xgb_regressor_is_seeded(self):
