@@ -5,9 +5,15 @@ from ml.remarks import (
 )
 
 
-class TestGoldenRecordSCC417:
-    """The real DA Region 7 report SCC-26-417-417 is the only real labeled
-    example available. Every derived remark must match it exactly."""
+class TestKnownReferenceValues:
+    """Fixed reference points for the band functions, at the same numeric
+    values a real DA Region 7 report (laboratory_code SCC-26-417-417) once
+    supplied. That record was later traced to a document outside this
+    project's real dataset and retired as a training/golden-test fixture
+    (see docs/superpowers/specs/2026-08-05-real-soil-data-retraining-design.md's
+    "Golden test — retired" section) -- these are no longer validated
+    against an independent real-world source, just fixed values that
+    exercise each band function's boundaries and typical range."""
 
     def test_ph_8_17_is_moderately_alkaline(self):
         assert derive_ph_remark(8.17) == "MODERATELY ALKALINE"
