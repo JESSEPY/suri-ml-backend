@@ -1,8 +1,62 @@
 # Real Soil Data Retraining — Final Whole-Branch Review Findings
 
-**Status: NOT production-ready. Fix work in progress** — see the implementation plan at
-`docs/superpowers/plans/2026-08-06-final-review-fixes.md`, which folds the architecture decision
-below into the fix for Critical #1/#2.
+**Status: All 3 Critical + 5 Important findings fixed and independently re-verified** (2026-08-06)
+— see `docs/superpowers/plans/2026-08-06-final-review-fixes.md` for the fix plan (9 tasks, all
+complete) and the verification notes below. Two things remain outside this fix's scope:
+
+1. **The Supabase migration is written but not applied** (`supabase/migrations/20260806_align_ml_training_schema.sql`)
+   — applying it, then running `python -m data.ingest_to_supabase`, is a deliberate, separate
+   action against shared production infrastructure, not something done automatically as part of
+   this fix.
+2. **A new, out-of-scope discovery**: `lab-results-synthesizer.py` at the repo root is dead,
+   disconnected reference material from the project's very first commit (predates this session
+   entirely) — never imported by any real code path, but still generates fake data against the
+   long-retired schema (`potassium_ppm`, the old 6-crop list, `SCC-26-{i}`-style lab codes — quite
+   possibly the actual origin of the `SCC-26-417-417` golden-record lab code, given the numbering
+   scheme). Flagged rather than deleted, since it predates this work and was explicitly labeled
+   "reference material" in the initial commit — worth an explicit decision, not a unilateral one.
+
+## Verification (2026-08-06)
+
+Re-checked each finding directly against the current code and a live server, not just re-read the
+diffs:
+
+- **Critical #1** (`ml/recipes.py` unit bug): `POST /predict` for Coconut/bearing now returns
+  `target_unit: "kg_tree"` with `app1_formulation` containing `"kg/tree"` and no `"kg/ha"` —
+  confirmed live.
+- **Critical #2** (zero training coverage): `POST /predict` for `{crop: "Rice", cultivation_method:
+  "Upland", om: 1.5, p: 5.0, k: 0.1}` returns `target_n: 45.0`, `source: "table-lookup"` — matches
+  `nutrient_requirements("Rice", 1.5, 5.0, 0.1, cultivation_method="Upland")` exactly (previously
+  this combination — near-zero training coverage — got a model guess far from this value).
+- **Critical #3** (migration): rewritten to `DELETE FROM public.ml_soil_training_data` before any
+  rename, so no pre-existing row can carry a stale ppm-scale K value under the new
+  `potassium_cmol_kg` name. `ml_fertilizer_predictions` (a separate, JSONB-based audit table) is
+  correctly left untouched — an earlier draft of this fix mistakenly deleted from it too, caught in
+  self-review before commit.
+- **Important #4** (README): full rewrite, matches the current request/response shape verified
+  live above.
+- **Important #5** (`resolve_variety` gating): `resolve_variety("Cassava", "Hybrid")` now returns
+  `"None"`, matching its two siblings.
+- **Important #6** (Coffee golden test): resolved honestly — the unreachable, unverifiable dead row
+  was removed and the original plan's Global Constraint amended to say why, rather than forcing an
+  unsourced-density check.
+- **Important #7** (tests writing to production Supabase): `tests/test_api.py` now has an autouse
+  fixture no-opping `log_prediction` for the whole file; `TestLoggingIsNonFatal`'s one test that
+  specifically needs it to raise correctly overrides the autouse fixture (verified by tracing
+  pytest's fixture-then-test-body execution order, not just trusting the report).
+- **Important #8** (stale docstrings): all corrected — `ml/remarks.py`, `ml/recipes.py`,
+  `data/ingest_to_supabase.py`, `ml/model.py`, and (caught during this final re-verification pass,
+  after the fix plan's Task 7 brief omitted it despite the original findings doc naming it)
+  `tests/test_remarks.py`'s `TestGoldenRecordSCC417` class, renamed
+  `TestKnownReferenceValues` with corrected provenance framing.
+
+One additional gap found and fixed during this fix cycle, not in the original 8 findings: a
+complete request with an unrecognized `age_band` (e.g. a typo) was raising an uncaught `KeyError`
+from `nutrient_requirements()` inside `/predict` — an unhandled 500, unlike every other
+invalid-input case in this API, which gets a clean 422. Fixed with a try/except and a regression
+test (`main.py`, commit `fb2561d`).
+
+Full suite: 228/228 passing throughout.
 
 ## Context
 
