@@ -16,24 +16,33 @@ from sklearn.impute import SimpleImputer
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, OrdinalEncoder, StandardScaler
 
-from data.crop_baselines import CROPS
+from data.nutrient_recommendation_guide import CROPS, RICE_CULTIVATION_METHODS, BEARING_AGE_BAND, GUIDE_ROWS
 from ml.remarks import K_ORDER, OM_ORDER, P_ORDER, PH_ORDER
 
 CONTINUOUS = [
     "ph", "organic_matter_pct", "total_nitrogen_pct",
-    "phosphorus_ppm", "potassium_ppm",
+    "phosphorus_ppm", "potassium_cmol_kg",
     "temp", "moist", "ec", "sal",
 ]
 
 ORDERED = ["ph_remark", "om_remark", "p_remark", "k_remark"]
 
-NOMINAL = ["crop", "data_source"]
+NOMINAL = ["crop", "variety", "cultivation_method", "age_band", "data_source"]
 
 FEATURE_COLUMNS = CONTINUOUS + ORDERED + NOMINAL
 
-TARGET_COLUMNS = ["target_n_kg_ha", "target_p2o5_kg_ha", "target_k2o_kg_ha"]
+TARGET_COLUMNS = ["target_n", "target_p2o5", "target_k2o"]
 
 DATA_SOURCES = ["iot", "lab", "stk"]
+
+# "None" (the string, not Python None) covers every crop/row that doesn't
+# track this axis. See data/nutrient_recommendation_guide.py for how each
+# is resolved from a request before it ever reaches this layer.
+VARIETIES = ["None", "Hybrid", "Inbred", "OPV"]
+CULTIVATION_METHODS = ["None", *RICE_CULTIVATION_METHODS]
+AGE_BANDS = ["None"] + sorted({
+    key.split("|", 1)[1] for key in GUIDE_ROWS if key.split("|", 1)[0] in BEARING_AGE_BAND
+})
 
 _ORDERED_CATEGORIES = [PH_ORDER, OM_ORDER, P_ORDER, K_ORDER]
 
@@ -53,12 +62,13 @@ def build_preprocessor() -> ColumnTransformer:
         )),
     ])
 
-    # handle_unknown="error", deliberately: an unrecognised crop must fail loudly
-    # rather than produce an all-zeros vector and a confident-looking prediction
-    # built on no crop information. A farmer acting on that could over- or
+    # handle_unknown="error", deliberately: an unrecognised crop, variety,
+    # cultivation_method, or age_band must fail loudly rather than produce
+    # an all-zeros vector and a confident-looking prediction built on no
+    # real information. A farmer acting on that could over- or
     # under-fertilize a real field.
     nominal = OneHotEncoder(
-        categories=[CROPS, DATA_SOURCES],
+        categories=[CROPS, VARIETIES, CULTIVATION_METHODS, AGE_BANDS, DATA_SOURCES],
         handle_unknown="error",
         sparse_output=False,
     )
