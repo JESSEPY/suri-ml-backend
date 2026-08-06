@@ -1,13 +1,23 @@
 # SURI Fertilizer ML Backend
 
-Predicts fertilizer nutrient requirements (N, P₂O₅, K₂O in kg/ha) and application
-formulations from soil test data, for the Department of Agriculture Region 7.
+Predicts fertilizer nutrient requirements (N, P₂O₅, K₂O) and application formulations from soil
+test data, for the Department of Agriculture Region 7.
 
-Serves all three SURI data-entry flows — laboratory results, manual STK readings,
-and IoT probe readings — from one model, using missingness indicators so each
-source is handled according to what it can actually measure.
+Two answer paths, chosen automatically per request:
+- **Complete soil chemistry** (organic matter, phosphorus, and potassium all present) is answered
+  by a direct lookup against the official BSWM Nutrient Recommendation Guide — exact, not a model
+  approximation.
+- **Incomplete soil chemistry** (the real case for IoT probe and Rapid Soil Test Kit readings,
+  which cannot measure organic matter at all) is answered by a trained ensemble model, using
+  missingness indicators so it knows what wasn't measured rather than trusting an imputed guess.
 
-**Design spec:** `docs/superpowers/specs/2026-08-03-suri-fertilizer-ml-pipeline-design.md`
+The response's `source` field says which path answered: `"table-lookup"` or `"ml-ensemble"`.
+
+**Design docs:**
+- `docs/superpowers/specs/2026-08-05-real-soil-data-retraining-design.md` — the real-data retraining design.
+- `docs/superpowers/specs/2026-08-06-real-soil-data-retraining-results.md` — real training results.
+- `docs/superpowers/specs/2026-08-06-real-soil-data-retraining-final-review-findings.md` — what
+  this session's Critical/Important fixes addressed, and why.
 
 ## Setup
 
@@ -16,23 +26,24 @@ pip install -r requirements.txt
 cp .env.example .env    # then fill in from suri/.env.local
 ```
 
-The service shares `suri/`'s Supabase project. Copy `NEXT_PUBLIC_SUPABASE_URL`
-into `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` as-is.
+The service shares `suri/`'s Supabase project. Copy `NEXT_PUBLIC_SUPABASE_URL` into `SUPABASE_URL`
+and `SUPABASE_SERVICE_ROLE_KEY` as-is.
 
-Apply `supabase/migrations/20260803_ml_fertilizer_tables.sql` in the Supabase
-SQL editor before ingesting.
+Apply every migration under `supabase/migrations/` (in filename order) in the Supabase SQL editor
+before ingesting.
 
-## Generate data, ingest, and train
+## Parse, ingest, and train
 
 ```bash
-python -m data.generate_synthetic_data          # writes suri_synthetic_training_data_region7.csv
-python -m data.ingest_to_supabase               # upserts 15,000 rows
-python -m ml.train --csv suri_synthetic_training_data_region7.csv
+python -m data.parse_real_soil_database    # reads ../suri/public/Region 7-National Soil Database_2022-2025.xlsx
+                                            # writes suri_real_training_data.csv
+python -m data.ingest_to_supabase          # upserts into Supabase
+python -m ml.train --csv suri_real_training_data.csv
 ```
 
-`ml/train.py` reads from Supabase when `--csv` is omitted. It writes versioned
-artifacts to `ml/artifacts/<version>/` and prints a metrics summary including the
-golden-record check.
+`ml/train.py` reads from Supabase when `--csv` is omitted. It writes versioned artifacts to
+`ml/artifacts/<version>/` and prints a metrics summary (MAE/R² overall, by data source, and by
+crop).
 
 ## Serve
 
@@ -40,66 +51,75 @@ golden-record check.
 uvicorn main:app --port 8001
 ```
 
-Port 8001 — **not** 8000, which `suri/features/flows/iot/IoTFlow.tsx` already
-uses for an unrelated contract.
+Port 8001 — **not** 8000, which `suri/features/flows/iot/IoTFlow.tsx` already uses for an
+unrelated contract.
 
 ## API
 
 ### `POST /predict`
 
-Only `crop`, `data_source`, and `ph` are required. Everything else is optional:
-missing values are median-imputed and explicitly flagged to the model.
+Only `crop`, `data_source`, and `ph` are required. Everything else is optional; the model path
+imputes missing values (median, with an explicit missingness flag), while the table-lookup path
+requires `organic_matter_pct`, `phosphorus_ppm`, and `potassium_cmol_kg` to activate at all.
 
 ```json
 {
-  "crop": "Sorghum",
+  "crop": "Rice",
+  "variety": "Hybrid",
+  "cultivation_method": "Lowland Wet",
   "data_source": "lab",
-  "ph": 8.17,
-  "organic_matter_pct": 3.21,
-  "phosphorus_ppm": 18.96,
-  "potassium_ppm": 138.0,
-  "farm_area_sqm": 210,
-  "laboratory_code": "SCC-26-417-417"
+  "ph": 6.5,
+  "organic_matter_pct": 2.8,
+  "phosphorus_ppm": 18.0,
+  "potassium_cmol_kg": 0.35,
+  "farm_area_sqm": 5000,
+  "laboratory_code": "SCC-2024-0417"
 }
 ```
 
 | Field | Required | Notes |
 |---|---|---|
-| `crop` | yes | One of: Cabbage, Corn, Rice, Sorghum, Sugarcane, Tomato. Unknown crops are rejected with 422. |
+| `crop` | yes | One of: Banana, Cacao, Cassava, Coconut, Corn, Mango, Peanut, Rice, Tomato. Unknown crops are rejected with 422. |
+| `variety` | no | Rice: `Hybrid`/`Inbred`. Corn: `Hybrid`/`OPV`. Ignored (treated as unset) for every other crop. |
+| `cultivation_method` | no | Rice only: `Upland`/`Lowland Wet`/`Lowland Dry`. Defaults to `Lowland Wet` when Rice is requested without one. |
+| `age_band` | no | Coconut/Cacao/Mango only. Pass `"bearing"` (or omit) for the mature/fruit-bearing default, or a specific band (e.g. Coconut: `Below 1yr`/`1-5yrs`/`6-8yrs`/`9yrs & up`). |
 | `data_source` | yes | `lab`, `stk`, or `iot` |
 | `ph` | yes | 0–14 |
-| `organic_matter_pct` | no | 0–100 |
+| `organic_matter_pct` | no | 0–100. Required (along with `phosphorus_ppm`/`potassium_cmol_kg`) for the exact table-lookup path — IoT/STK readings structurally can't supply this, so those requests always use the model path instead. |
 | `total_nitrogen_pct` | no | Derived as `organic_matter_pct × 0.05` when omitted |
-| `phosphorus_ppm`, `potassium_ppm` | no | ≥ 0 |
+| `phosphorus_ppm` | no | ≥ 0 |
+| `potassium_cmol_kg` | no | ≥ 0, the lab's native unit (not ppm) |
 | `temp`, `moist`, `ec`, `sal` | no | IoT probe readings |
-| `farm_area_sqm` | no | Enables `farm_totals` in the response |
+| `farm_area_sqm` | no | Enables `farm_totals` in the response, only for `kg_ha` crops |
 | `laboratory_code` | no | Recorded in the prediction audit log |
 
-Response (real output, from the SCC-26-417-417 record above):
+Response (a complete request, answered by the exact table):
 
 ```json
 {
-  "target_n_kg_ha": 46.4,
-  "target_p2o5_kg_ha": 44.9,
-  "target_k2o_kg_ha": 56.5,
-  "app1_formulation": "164 kg/ha (14-14-14) + 10 kg/ha (21-0-0) + 15 kg/ha (0-0-60)",
-  "app2_formulation": "164 kg/ha (14-14-14) + 10 kg/ha (21-0-0) + 15 kg/ha (0-0-60)",
+  "target_n": 90.0,
+  "target_p2o5": 60.0,
+  "target_k2o": 40.0,
+  "target_unit": "kg_ha",
+  "app1_formulation": "214 kg/ha (14-14-14) + 65 kg/ha (21-0-0)",
+  "app2_formulation": "214 kg/ha (14-14-14) + 65 kg/ha (21-0-0)",
+  "application_schedule": "Basal: apply half of the recommended N plus all P and K 10-14 days after transplanting (DAT)...",
   "derived_remarks": {
-    "ph_remark": "MODERATELY ALKALINE",
+    "ph_remark": "SLIGHTLY ACIDIC",
     "om_remark": "MODERATELY LOW",
     "p_remark": "HIGH",
     "k_remark": "SUFFICIENT+"
   },
-  "farm_totals": { "area_ha": 0.021, "n_kg": 0.974, "p2o5_kg": 0.943, "k2o_kg": 1.187 },
-  "model_version": "2026-08-04-011242",
-  "source": "ml-ensemble"
+  "farm_totals": { "area_ha": 0.5, "n_kg": 45.0, "p2o5_kg": 30.0, "k2o_kg": 20.0 },
+  "model_version": "2026-08-06-011035",
+  "source": "table-lookup"
 }
 ```
 
-Nutrient targets are **per-hectare rates**. `farm_totals` applies the area
-scaling — from the same rounded per-hectare figures shown above, so the totals
-always reconcile with what's displayed — and is `null` when `farm_area_sqm` is
-omitted.
+`target_unit` is `"kg_ha"` for Rice/Corn/Cassava/Peanut/Tomato and `"kg_tree"` for
+Coconut/Cacao/Mango/Banana — tree-crop rates are legitimately sub-1. `farm_totals` is only computed
+for `kg_ha` crops (a per-tree rate needs a tree count, which this API doesn't collect) and is
+`null` when `farm_area_sqm` is omitted or the crop is `kg_tree`.
 
 ### `GET /health`
 
@@ -111,30 +131,14 @@ Returns `{status, model_version, artifacts_loaded, supabase_reachable}`.
 python -m pytest -v
 ```
 
-The suite includes a golden test against the real DA report SCC-26-417-417 — the
-only real labeled example available — and a leakage guard asserting that no
-`laboratory_code` spans two dataset splits.
-
 ## Known limitations
 
-- **The regression targets (N/P₂O₅/K₂O kg/ha) are the model's real signal.**
-  Trained on the full 5,000-record synthetic set, they hold R² 0.90–0.97 against
-  a mean-baseline dummy regressor and pass the golden test against the one real
-  labeled example available (SCC-26-417-417: predicted 46.4/44.9/56.5 vs. actual
-  50/40/60, tolerance ±15 kg/ha). Judge V1 on these.
-- **The recipe classifiers (`app1_formulation`/`app2_formulation`) are not yet
-  meaningful and should not be trusted for held-out records.** The recipe string
-  is a deterministic function of continuous kg amounts, so it is near-unique per
-  record (5,000 records → 3,144 distinct classes) — no train/test split can cover
-  every class, and at full scale the classifier only recognizes ~15% of held-out
-  labels from training, scoring ~4% accuracy on that subset (see
-  `test_coverage`/`accuracy` in a run's `metadata.json`). The API still returns a
-  best-effort formulation string on every request; it becomes genuinely useful
-  once trained on real DA data, where formulations cluster around agronomist
-  judgment rather than continuous per-record arithmetic.
-- Crop baselines other than Sorghum are placeholder scaffolding awaiting
-  agronomist review. They live in `data/crop_baselines.py` so correcting them is
-  one edit plus a retrain.
-- The OM and K remark bands are calibrated to a single real example. The pH and
-  Olsen-P bands are standard published classes that reproduce that example
-  independently.
+- The table-lookup path's Rice cultivation-method P-band transcription passed a manual PDF
+  cross-check but one specific discrepancy (the Rice-Inbred worked example's K value) remains
+  unresolved — see `tests/test_nutrient_recommendation_guide.py::TestGoldenRecordRiceInbred`'s
+  docstring.
+- P-band classification assumes the Olsen method (`data/nutrient_recommendation_guide.py`'s
+  `P_METHOD`) — the source spreadsheet never states which method Region 7 labs actually use.
+- The model path's accuracy varies significantly by crop sample size — see
+  `docs/superpowers/specs/2026-08-06-real-soil-data-retraining-results.md` for the full by-crop
+  breakdown; Tomato (20 real rows) is a known weak spot.
