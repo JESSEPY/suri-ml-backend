@@ -4,10 +4,14 @@ Band tables per spec section 4. Boundaries use [lower, upper) semantics:
 a value is placed in the first band whose upper bound it falls strictly below.
 
 Provenance: the pH classes are the standard USDA/BSWM soil reaction classes and
-the Olsen-P classes are the standard Olsen interpretation; both independently
-reproduce the real SCC-417 report without having been fitted to it. The OM and K
-bands are calibrated to that single real example and should be confirmed against
-DA RSL's published interpretation chart before production use. Changing any
+the Olsen-P classes are the standard Olsen interpretation. The OM and K bands
+were originally calibrated against a specific real DA report
+(laboratory_code SCC-26-417-417); that record was later traced to a document
+outside this project's real dataset and retired as a training/golden-test
+fixture (see docs/superpowers/specs/2026-08-05-real-soil-data-retraining-design.md's
+"Golden test — retired" section) — these band boundaries were never revisited
+against an independent source afterward and should be confirmed against DA
+RSL's published interpretation chart before production use. Changing any
 boundary is a one-constant edit here plus a retrain.
 """
 

@@ -1,4 +1,5 @@
-"""Load the synthetic training CSV into Supabase (spec section 9).
+"""Load the real training CSV (data/parse_real_soil_database.py's output)
+into Supabase.
 
 Upserts on the (laboratory_code, data_source) primary key so re-running is
 idempotent rather than duplicating the corpus.

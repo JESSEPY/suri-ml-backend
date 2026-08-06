@@ -1,10 +1,10 @@
 """Ensemble model definitions (spec section 8).
 
-XGBoost captures the non-linear pH/phosphorus interaction and categorical splits;
-Kernel Ridge Regression contributes an L2-regularised smooth fit that resists
-overfitting the synthetic set. sklearn's VotingRegressor does not support
-multi-output, so EnsembleFertilizerRegressor holds one per target and exposes a
-single multi-output fit/predict.
+XGBoost captures non-linear interactions and categorical splits; Kernel Ridge
+Regression contributes an L2-regularised smooth fit that resists overfitting
+a corpus this size (a few thousand real rows). sklearn's VotingRegressor does
+not support multi-output, so EnsembleFertilizerRegressor holds one per target
+and exposes a single multi-output fit/predict.
 """
 
 from __future__ import annotations
