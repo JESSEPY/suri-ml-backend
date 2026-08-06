@@ -42,9 +42,24 @@ def frame_to_records(frame: pd.DataFrame) -> list[dict]:
     return frame.astype(object).where(pd.notna(frame), None).to_dict("records")
 
 
+def _load_frame(csv_path: str) -> pd.DataFrame:
+    # keep_default_na=False + explicit na_values=[""]: several of this
+    # schema's nominal columns (variety/cultivation_method/age_band) use
+    # the literal string "None" as a real, valid category (see
+    # ml/preprocessing.py's VARIETIES/CULTIVATION_METHODS/AGE_BANDS) --
+    # pandas' default NA-sniffing would otherwise silently read that text
+    # as NaN, which frame_to_records() below would then corrupt into a
+    # real SQL NULL on upsert (mirrors ml/train.py's _load_frame() fix in
+    # commit 4dfed4d for the same sentinel/NA-sniffing bug on the direct-CSV
+    # training path). An actually-missing numeric cell (e.g. an ungraded
+    # organic_matter_pct) is written by csv.DictWriter as a genuinely empty
+    # cell, which na_values=[""] still correctly treats as NaN.
+    return pd.read_csv(csv_path, keep_default_na=False, na_values=[""])
+
+
 def ingest(csv_path: str = OUTPUT_CSV, batch_size: int = DEFAULT_BATCH_SIZE) -> int:
     client = get_client()
-    records = frame_to_records(pd.read_csv(csv_path))
+    records = frame_to_records(_load_frame(csv_path))
 
     total = 0
     for index, batch in enumerate(chunked(records, batch_size), start=1):
