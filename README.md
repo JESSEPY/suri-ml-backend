@@ -54,6 +54,65 @@ uvicorn main:app --port 8001
 Port 8001 — **not** 8000, which `suri/features/flows/iot/IoTFlow.tsx` already uses for an
 unrelated contract.
 
+## Try it yourself
+
+With the server running (`uvicorn main:app --port 8001`), open
+**http://localhost:8001/docs** in a browser. FastAPI generates an interactive page there
+automatically — expand `POST /predict`, click "Try it out", paste one of the request bodies
+below into the box, and click "Execute" to see the real response. No separate frontend needed.
+
+**Complete request, field crop (`kg_ha`) — answered by the exact table, `source: "table-lookup"`:**
+```json
+{
+  "crop": "Rice",
+  "variety": "Hybrid",
+  "cultivation_method": "Lowland Wet",
+  "data_source": "lab",
+  "ph": 6.5,
+  "organic_matter_pct": 2.8,
+  "phosphorus_ppm": 18.0,
+  "potassium_cmol_kg": 0.35,
+  "farm_area_sqm": 5000,
+  "laboratory_code": "TEST-001"
+}
+```
+
+**Complete request, tree crop (`kg_tree`) — same exact path, but the amounts and formulation are
+per-tree, and `farm_totals` stays `null` (no tree count collected):**
+```json
+{
+  "crop": "Coconut",
+  "age_band": "bearing",
+  "data_source": "lab",
+  "ph": 6.5,
+  "organic_matter_pct": 2.8,
+  "phosphorus_ppm": 18.0,
+  "potassium_cmol_kg": 0.35,
+  "laboratory_code": "TEST-002"
+}
+```
+
+**Incomplete request (the real IoT/STK case — no organic matter reading) — falls back to the
+trained model, `source: "ml-ensemble"`:**
+```json
+{
+  "crop": "Rice",
+  "data_source": "stk",
+  "ph": 6.5
+}
+```
+
+Prefer the terminal? Any of the above works as a `curl` body too:
+```bash
+curl -s -X POST http://localhost:8001/predict \
+  -H "Content-Type: application/json" \
+  -d '{"crop":"Rice","data_source":"stk","ph":6.5}' \
+  | python -m json.tool
+```
+
+`GET /health` (also browsable at `/docs`) is the quickest way to confirm the server is up and
+which model version it loaded.
+
 ## API
 
 ### `POST /predict`
