@@ -102,6 +102,15 @@ BEARING_AGE_BAND: dict[str, str] = {
 
 RICE_CULTIVATION_METHODS = ("Upland", "Lowland Wet", "Lowland Dry")
 
+# crop -> the variety strings its guide rows actually distinguish. Every
+# other crop's variety is always "None" -- the guide has no per-variety
+# rows for them, so accepting an arbitrary variety string would just be an
+# unseen, meaningless one-hot combination at training/serving time.
+VARIETIES_BY_CROP: dict[str, tuple[str, ...]] = {
+    "Rice": ("Hybrid", "Inbred"),
+    "Corn": ("OPV", "Hybrid"),
+}
+
 # Guide row key -> GuideRow. Keys: bare crop name for crops the guide
 # doesn't further split (Cassava, Peanut, Tomato, Banana); "{crop}|{axis
 # value}" for Rice (cultivation_method), Corn (Native/Hybrid), and the
@@ -282,7 +291,9 @@ def target_unit_for_crop(crop: str) -> str:
 
 
 def resolve_variety(crop: str, variety: str | None) -> str:
-    return variety or "None"
+    if variety in VARIETIES_BY_CROP.get(crop, ()):
+        return variety
+    return "None"
 
 
 def resolve_cultivation_method(crop: str, cultivation_method: str | None) -> str:

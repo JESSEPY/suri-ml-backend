@@ -59,6 +59,21 @@ class TestResolvers:
     def test_age_band_passthrough_for_known_value(self):
         assert resolve_age_band("Coconut", "1-5yrs") == "1-5yrs"
 
+    def test_variety_only_applies_to_rice_and_corn(self):
+        assert resolve_variety("Cassava", "Hybrid") == "None"
+        assert resolve_variety("Tomato", "Hybrid") == "None"
+        assert resolve_variety("Mango", "Hybrid") == "None"
+
+    def test_variety_still_passes_through_for_rice_and_corn(self):
+        assert resolve_variety("Rice", "Hybrid") == "Hybrid"
+        assert resolve_variety("Corn", "Hybrid") == "Hybrid"
+
+    def test_variety_not_tracked_by_this_crop_falls_back_to_none(self):
+        """Corn doesn't track Inbred (a Rice-only variety) -- passing it for
+        Corn must not silently accept an axis value this crop's guide rows
+        don't distinguish."""
+        assert resolve_variety("Corn", "Inbred") == "None"
+
 
 class TestNutrientRequirements:
     def test_returns_a_numeric_triple(self):
