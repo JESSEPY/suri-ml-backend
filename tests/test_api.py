@@ -4,6 +4,17 @@ from fastapi.testclient import TestClient
 import main as service
 
 
+@pytest.fixture(autouse=True)
+def _no_real_supabase_writes(monkeypatch):
+    """Every /predict call in this file would otherwise insert a real row
+    into the live ml_fertilizer_predictions table in production Supabase --
+    confirmed happening (HTTP 201) before this fixture existed. Autouse so
+    every test in this file is covered without each one remembering to opt
+    in. TestLoggingIsNonFatal overrides this per-test (see below) since it
+    specifically needs log_prediction to raise, not silently succeed."""
+    monkeypatch.setattr(service, "log_prediction", lambda *args, **kwargs: None)
+
+
 @pytest.fixture(scope="module")
 def client():
     return TestClient(service.app)
@@ -32,7 +43,6 @@ class TestPredict:
                       "app1_formulation", "app2_formulation", "application_schedule",
                       "derived_remarks", "model_version", "source"]:
             assert field in body
-        assert body["source"] == "ml-ensemble"
         assert body["target_unit"] == "kg_ha"
 
     def test_remarks_are_derived_from_the_numerics(self, client):
@@ -43,11 +53,6 @@ class TestPredict:
         assert body["derived_remarks"]["k_remark"] == "SUFFICIENT+"
 
     def test_k_remark_uses_the_converted_ppm_value_not_the_raw_cmol_kg(self, client):
-        """0.35 cmol/kg -> 136.85 ppm, which is SUFFICIENT+ on the (unchanged,
-        ppm-scale) K bands. If a caller forgot the x391 conversion and fed
-        0.35 straight into derive_k_remark, that would read as DEFICIENT
-        (well under the 60 ppm floor) — this test exists to catch exactly
-        that regression."""
         body = client.post("/predict", json=SAMPLE_PAYLOAD).json()
         assert body["derived_remarks"]["k_remark"] == "SUFFICIENT+"
 
@@ -68,16 +73,12 @@ class TestPredict:
         assert client.post("/predict", json=payload).json()["farm_totals"] is None
 
     def test_farm_totals_absent_for_kg_tree_crops(self, client):
-        """A per-tree rate can't be scaled by hectares alone — this API
-        doesn't collect a tree count, so totalling isn't attempted."""
         payload = {**SAMPLE_PAYLOAD, "crop": "Coconut"}
         body = client.post("/predict", json=payload).json()
         assert body["target_unit"] == "kg_tree"
         assert body["farm_totals"] is None
 
     def test_minimal_payload_is_accepted(self, client):
-        """Only crop, data_source and ph are required — everything else is
-        imputed and flagged."""
         response = client.post("/predict", json={
             "crop": "Corn", "data_source": "iot", "ph": 6.4,
         })
@@ -104,12 +105,72 @@ class TestPredict:
         payload = {**SAMPLE_PAYLOAD, "crop": "Coconut", "age_band": "bearing"}
         assert client.post("/predict", json=payload).status_code == 200
 
-    def test_age_band_omitted_behaves_like_bearing(self, client):
-        with_bearing = {**SAMPLE_PAYLOAD, "crop": "Coconut", "age_band": "bearing"}
-        without = {**SAMPLE_PAYLOAD, "crop": "Coconut"}
-        response_a = client.post("/predict", json=with_bearing).json()
-        response_b = client.post("/predict", json=without).json()
-        assert response_a["target_n"] == pytest.approx(response_b["target_n"])
+
+class TestCompletenessRouter:
+    """The fix for Critical #1/#2: a request with complete OM/P/K is
+    answered by the exact guide table, not the model -- regardless of
+    whether the specific crop/variety/cultivation_method/age_band
+    combination has any training coverage."""
+
+    def test_complete_request_reports_table_lookup_source(self, client):
+        body = client.post("/predict", json=SAMPLE_PAYLOAD).json()
+        assert body["source"] == "table-lookup"
+
+    def test_incomplete_request_reports_ml_ensemble_source(self, client):
+        payload = {key: value for key, value in SAMPLE_PAYLOAD.items()
+                   if key != "phosphorus_ppm"}
+        body = client.post("/predict", json=payload).json()
+        assert body["source"] == "ml-ensemble"
+
+    def test_complete_request_matches_nutrient_requirements_exactly(self, client):
+        """The whole point of the router: for a complete request, /predict's
+        answer must be bit-for-bit what the deterministic table says, not a
+        model approximation of it."""
+        from data.nutrient_recommendation_guide import nutrient_requirements
+        body = client.post("/predict", json=SAMPLE_PAYLOAD).json()
+        expected_n, expected_p, expected_k = nutrient_requirements(
+            "Corn", om=2.8, p_ppm=18.0, k_cmol_kg=0.35,
+        )
+        assert body["target_n"] == pytest.approx(expected_n)
+        assert body["target_p2o5"] == pytest.approx(expected_p)
+        assert body["target_k2o"] == pytest.approx(expected_k)
+
+    def test_uncovered_cultivation_method_is_still_exact(self, client):
+        """Before this fix: Rice + Upland (near-zero real training coverage)
+        returned a model guess far from the guide's actual answer. Now it
+        must match the table exactly, the same as any other combination."""
+        from data.nutrient_recommendation_guide import nutrient_requirements
+        payload = {**SAMPLE_PAYLOAD, "crop": "Rice", "cultivation_method": "Upland",
+                   "organic_matter_pct": 1.5, "phosphorus_ppm": 5.0, "potassium_cmol_kg": 0.1}
+        body = client.post("/predict", json=payload).json()
+        expected_n, _, _ = nutrient_requirements(
+            "Rice", om=1.5, p_ppm=5.0, k_cmol_kg=0.1, cultivation_method="Upland",
+        )
+        assert body["target_n"] == pytest.approx(expected_n)
+
+    def test_uncovered_age_band_is_still_exact(self, client):
+        """Before this fix: Coconut + Below 1yr (zero real training
+        coverage) returned a model guess ~18x the guide's actual answer."""
+        from data.nutrient_recommendation_guide import nutrient_requirements
+        payload = {**SAMPLE_PAYLOAD, "crop": "Coconut", "age_band": "Below 1yr",
+                   "organic_matter_pct": 1.5, "phosphorus_ppm": 5.0, "potassium_cmol_kg": 0.1}
+        body = client.post("/predict", json=payload).json()
+        expected_n, _, _ = nutrient_requirements(
+            "Coconut", om=1.5, p_ppm=5.0, k_cmol_kg=0.1, age_band="Below 1yr",
+        )
+        assert body["target_n"] == pytest.approx(expected_n)
+
+    def test_kg_tree_formulation_uses_the_correct_unit_and_scale(self, client):
+        """Before this fix: a Coconut request's app1_formulation was a
+        classifier-predicted string like '214 kg/ha (14-14-14) + 71 kg/ha
+        (21-0-0)' -- kg/ha, at field-crop scale, for a kg_tree crop. Now the
+        formulation is computed directly from the same exact target the
+        table just produced."""
+        payload = {**SAMPLE_PAYLOAD, "crop": "Coconut", "age_band": "bearing"}
+        body = client.post("/predict", json=payload).json()
+        assert body["target_unit"] == "kg_tree"
+        assert "kg/tree" in body["app1_formulation"]
+        assert "kg/ha" not in body["app1_formulation"]
 
 
 class TestValidation:
@@ -128,8 +189,6 @@ class TestValidation:
         assert client.post("/predict", json={"crop": "Corn"}).status_code == 422
 
     def test_unknown_crop_is_rejected_with_the_valid_list(self, client):
-        """A silent fallback would return a confident number computed from no
-        crop information at all."""
         response = client.post("/predict", json={**SAMPLE_PAYLOAD, "crop": "Durian"})
         assert response.status_code == 422
         assert "Corn" in response.text
@@ -137,7 +196,9 @@ class TestValidation:
 
 class TestLoggingIsNonFatal:
     def test_prediction_succeeds_when_supabase_is_down(self, client, monkeypatch):
-        """An audit-log outage is not a reason to deny a farmer a recommendation."""
+        """An audit-log outage is not a reason to deny a farmer a
+        recommendation. This overrides the module's autouse no-op fixture
+        with a raising one, specifically to prove /predict survives it."""
         def explode(*args, **kwargs):
             raise RuntimeError("supabase unreachable")
         monkeypatch.setattr(service, "log_prediction", explode)

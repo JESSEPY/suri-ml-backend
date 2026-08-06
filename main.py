@@ -21,11 +21,12 @@ from pydantic import BaseModel, Field, field_validator
 
 from data.mode_of_application import application_schedule_for_crop
 from data.nutrient_recommendation_guide import (
-    CROPS, k_cmol_to_ppm, resolve_age_band, resolve_cultivation_method,
-    resolve_variety, target_unit_for_crop,
+    CROPS, k_cmol_to_ppm, nutrient_requirements, resolve_age_band,
+    resolve_cultivation_method, resolve_variety, target_unit_for_crop,
 )
 from ml.agronomy import total_nitrogen_from_om
 from ml.preprocessing import FEATURE_COLUMNS
+from ml.recipes import plan_applications
 from ml.remarks import (
     derive_k_remark, derive_om_remark, derive_p_remark, derive_ph_remark,
 )
@@ -70,6 +71,16 @@ class SoilTestRequest(BaseModel):
             raise ValueError(f"Unknown crop '{value}'. Valid crops: {', '.join(CROPS)}")
         return value
 
+    def is_complete(self) -> bool:
+        """A request nutrient_requirements() can answer exactly -- the same
+        completeness rule data/parse_real_soil_database.py's
+        build_training_row() uses to decide whether a row is trainable."""
+        return (
+            self.organic_matter_pct is not None
+            and self.phosphorus_ppm is not None
+            and self.potassium_cmol_kg is not None
+        )
+
 
 class FarmTotals(BaseModel):
     area_ha: float
@@ -89,7 +100,7 @@ class PredictionResponse(BaseModel):
     derived_remarks: dict[str, str]
     farm_totals: FarmTotals | None
     model_version: str
-    source: str = "ml-ensemble"
+    source: str
 
 
 def latest_version() -> str:
@@ -113,9 +124,6 @@ def load_artifacts() -> dict:
         "version": version,
         "preprocessor": joblib.load(os.path.join(directory, "preprocessor.joblib")),
         "regressor": joblib.load(os.path.join(directory, "regressor.joblib")),
-        "clf_app1": joblib.load(os.path.join(directory, "clf_app1.joblib")),
-        "clf_app2": joblib.load(os.path.join(directory, "clf_app2.joblib")),
-        "encoders": joblib.load(os.path.join(directory, "label_encoders.joblib")),
     }
 
 
@@ -184,28 +192,31 @@ def health() -> dict:
 def predict(request: SoilTestRequest) -> PredictionResponse:
     features = _build_feature_row(request)
 
-    try:
-        X = ARTIFACTS["preprocessor"].transform(features)
-    except ValueError as error:
-        raise HTTPException(status_code=422, detail=str(error))
+    if request.is_complete():
+        # Exact: the guide table already has the right answer for any
+        # (crop, variety, cultivation_method, age_band) combination,
+        # regardless of whether the model was ever trained on it.
+        n, p2o5, k2o = nutrient_requirements(
+            request.crop, request.organic_matter_pct, request.phosphorus_ppm,
+            request.potassium_cmol_kg, variety=request.variety,
+            cultivation_method=request.cultivation_method, age_band=request.age_band,
+        )
+        source = "table-lookup"
+    else:
+        try:
+            X = ARTIFACTS["preprocessor"].transform(features)
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error))
+        n, p2o5, k2o = ARTIFACTS["regressor"].predict(X)[0]
+        n, p2o5, k2o = float(n), float(p2o5), float(k2o)
+        source = "ml-ensemble"
 
-    n, p2o5, k2o = ARTIFACTS["regressor"].predict(X)[0]
-    n, p2o5, k2o = round(float(n), 3), round(float(p2o5), 3), round(float(k2o), 3)
-
-    app1 = ARTIFACTS["encoders"]["app1_formulation"].inverse_transform(
-        ARTIFACTS["clf_app1"].predict(X))[0]
-    app2 = ARTIFACTS["encoders"]["app2_formulation"].inverse_transform(
-        ARTIFACTS["clf_app2"].predict(X))[0]
-
+    n, p2o5, k2o = round(n, 3), round(p2o5, 3), round(k2o, 3)
     target_unit = target_unit_for_crop(request.crop)
+    app1, app2 = plan_applications(n, p2o5, k2o, target_unit)
 
     farm_totals = None
     if request.farm_area_sqm and target_unit == "kg_ha":
-        # Derived from the rounded per-hectare rates, not the raw regressor
-        # output, so the displayed totals always reconcile with the displayed
-        # per-hectare figures a farmer would multiply by hand. Not attempted
-        # for kg_tree crops — that needs a tree count, which this API
-        # doesn't collect, not a hectare figure.
         hectares = request.farm_area_sqm / SQM_PER_HECTARE
         farm_totals = FarmTotals(
             area_ha=round(hectares, 4),
@@ -219,8 +230,8 @@ def predict(request: SoilTestRequest) -> PredictionResponse:
         target_p2o5=p2o5,
         target_k2o=k2o,
         target_unit=target_unit,
-        app1_formulation=str(app1),
-        app2_formulation=str(app2),
+        app1_formulation=app1,
+        app2_formulation=app2,
         application_schedule=application_schedule_for_crop(request.crop),
         derived_remarks={
             "ph_remark": features.at[0, "ph_remark"],
@@ -230,6 +241,7 @@ def predict(request: SoilTestRequest) -> PredictionResponse:
         },
         farm_totals=farm_totals,
         model_version=ARTIFACTS["version"],
+        source=source,
     )
 
     # An audit-log outage must never deny a farmer their recommendation.
