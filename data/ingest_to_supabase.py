@@ -13,7 +13,7 @@ import pandas as pd
 from dotenv import load_dotenv
 from supabase import Client, create_client
 
-from data.generate_synthetic_data import OUTPUT_CSV
+from data.parse_real_soil_database import OUTPUT_CSV
 
 TABLE = "ml_soil_training_data"
 DEFAULT_BATCH_SIZE = 500

@@ -1,7 +1,9 @@
-import pandas as pd
+import math
+
 import pytest
+
 from data.ingest_to_supabase import chunked, frame_to_records
-from data.generate_synthetic_data import generate
+from tests.fixtures import sample_training_frame
 
 
 class TestChunking:
@@ -19,16 +21,17 @@ class TestChunking:
 class TestRecordConversion:
     @pytest.fixture(scope="class")
     def records(self):
-        return frame_to_records(generate(num_records=10, seed=42))
+        return frame_to_records(sample_training_frame(num_records=10, seed=42))
 
     def test_produces_one_record_per_row(self, records):
-        assert len(records) == 30
+        assert len(records) == 10
 
     def test_nan_becomes_none_for_json(self, records):
-        """Supabase rejects NaN — it is not valid JSON. Missing values must
-        serialise as null."""
-        iot = [record for record in records if record["data_source"] == "iot"]
-        assert all(record["organic_matter_pct"] is None for record in iot)
+        """Supabase rejects NaN — it is not valid JSON. Any NaN produced by
+        pandas (e.g. from an unset optional field) must serialise as null."""
+        for record in records:
+            for value in record.values():
+                assert not (isinstance(value, float) and math.isnan(value))
 
     def test_records_are_json_serialisable(self, records):
         import json
