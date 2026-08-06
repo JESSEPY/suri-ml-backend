@@ -172,6 +172,16 @@ class TestCompletenessRouter:
         assert "kg/tree" in body["app1_formulation"]
         assert "kg/ha" not in body["app1_formulation"]
 
+    def test_unrecognized_age_band_is_rejected_not_a_500(self, client):
+        """Unlike variety/cultivation_method (which degrade gracefully to a
+        default inside the resolvers), an age_band string that isn't one of
+        the crop's real guide bands has no fallback -- nutrient_requirements()
+        raises KeyError, which must surface as a clean 422, not an unhandled
+        server error."""
+        payload = {**SAMPLE_PAYLOAD, "crop": "Coconut", "age_band": "nonsense"}
+        response = client.post("/predict", json=payload)
+        assert response.status_code == 422
+
 
 class TestValidation:
     def test_ph_above_fourteen_is_rejected(self, client):

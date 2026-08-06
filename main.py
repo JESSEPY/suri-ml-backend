@@ -195,12 +195,24 @@ def predict(request: SoilTestRequest) -> PredictionResponse:
     if request.is_complete():
         # Exact: the guide table already has the right answer for any
         # (crop, variety, cultivation_method, age_band) combination,
-        # regardless of whether the model was ever trained on it.
-        n, p2o5, k2o = nutrient_requirements(
-            request.crop, request.organic_matter_pct, request.phosphorus_ppm,
-            request.potassium_cmol_kg, variety=request.variety,
-            cultivation_method=request.cultivation_method, age_band=request.age_band,
-        )
+        # regardless of whether the model was ever trained on it. A
+        # crop-inapplicable variety/cultivation_method value degrades
+        # gracefully inside the resolvers (falls back to "None" or a
+        # default), but an age_band string that isn't one of that crop's
+        # real guide bands (e.g. a typo) has no fallback and raises KeyError
+        # -- caught here and turned into the same clean 422 every other
+        # invalid-input case in this API already gets, not an unhandled 500.
+        try:
+            n, p2o5, k2o = nutrient_requirements(
+                request.crop, request.organic_matter_pct, request.phosphorus_ppm,
+                request.potassium_cmol_kg, variety=request.variety,
+                cultivation_method=request.cultivation_method, age_band=request.age_band,
+            )
+        except KeyError as error:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Unrecognized age_band {request.age_band!r} for crop {request.crop!r}: {error}",
+            )
         source = "table-lookup"
     else:
         try:
