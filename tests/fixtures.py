@@ -50,7 +50,7 @@ def sample_training_frame(num_records: int = 200, seed: int = 42) -> pd.DataFram
         age_band = resolve_age_band(crop, None)
 
         n, p2o5, k2o = nutrient_requirements(crop, om, phosphorus, potassium)
-        app1, app2 = plan_applications(n, p2o5, k2o)
+        app1, app2 = plan_applications(n, p2o5, k2o, target_unit_for_crop(crop))
 
         rows.append({
             "laboratory_code": f"TEST-{index}",

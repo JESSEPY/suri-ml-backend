@@ -273,7 +273,7 @@ def build_training_row(raw: dict) -> dict | None:
         crop, om, p, k,
         variety=variety, cultivation_method=cultivation_method, age_band=age_band,
     )
-    app1, app2 = plan_applications(n, p2o5, k2o)
+    app1, app2 = plan_applications(n, p2o5, k2o, target_unit_for_crop(crop))
     k_ppm = k_cmol_to_ppm(k)
 
     return {
