@@ -92,8 +92,8 @@ per-tree, and `farm_totals` stays `null` (no tree count collected):**
 }
 ```
 
-**Incomplete request (the real IoT/STK case — no organic matter reading) — falls back to the
-trained model, `source: "ml-ensemble"`:**
+**Incomplete request, minimal (only `ph` given) — falls back to the trained model,
+`source: "ml-ensemble"`:**
 ```json
 {
   "crop": "Rice",
@@ -101,6 +101,25 @@ trained model, `source: "ml-ensemble"`:**
   "ph": 6.5
 }
 ```
+
+**Incomplete request, realistic IoT/STK reading (N, P, K, pH — everything the device *can*
+measure, still no organic matter) — still `source: "ml-ensemble"`, but now scored from real N/P/K
+instead of imputed values:**
+```json
+{
+  "crop": "Rice",
+  "data_source": "iot",
+  "ph": 6.5,
+  "total_nitrogen_pct": 0.14,
+  "phosphorus_ppm": 18.0,
+  "potassium_cmol_kg": 0.35
+}
+```
+`total_nitrogen_pct` is the only N-shaped field in this schema — that's where an IoT/STK device's
+N reading belongs. `organic_matter_pct` is the one field no IoT probe or rapid kit can measure at
+all, so it's the one that's always missing here, and that alone is enough to route to the model
+regardless of how complete the rest of the reading is (see `SoilTestRequest.is_complete()` in
+`main.py`).
 
 Prefer the terminal? Any of the above works as a `curl` body too:
 ```bash
