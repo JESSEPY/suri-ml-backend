@@ -5,6 +5,12 @@ from data.parse_real_soil_database import (
     normalize_cultivation_method, normalize_age_band, find_column,
 )
 
+import openpyxl
+from data.parse_real_soil_database import (
+    build_training_row, parse_sheet, SHEET_CONFIGS, LAB_DETAIL_HEADERS,
+    SOIL_DATA_2025_HEADERS,
+)
+
 
 class TestParseNumericCell:
     def test_real_number_passes_through_as_float(self):
@@ -82,6 +88,20 @@ class TestNormalizeCrop:
         assert normalize_crop("Sorghum") is None
         assert normalize_crop("Ampalaya") is None
 
+    def test_crop_with_trailing_cultivation_method_text_still_resolves(self):
+        """The Crops field is free text that often trails the crop name with
+        cultivation-method/age-band words (see normalize_cultivation_method /
+        normalize_age_band, which re-scan this same raw text) -- the crop
+        itself must still resolve from a leading, whole-word match."""
+        assert normalize_crop("Rice Upland") == ("Rice", None)
+        assert normalize_crop("Rice Lowland Wet") == ("Rice", None)
+        assert normalize_crop("Coconut 6-8yrs") == ("Coconut", None)
+
+    def test_variety_prefix_still_wins_over_the_bare_crop_name(self):
+        """Longest-key-first matching must not let the bare "rice" key shadow
+        a variety-specific key like "hybrid rice"."""
+        assert normalize_crop("Hybrid Rice Lowland Wet") == ("Rice", "Hybrid")
+
 
 class TestNormalizeCultivationMethod:
     def test_detects_upland_for_rice(self):
@@ -125,3 +145,173 @@ class TestFindColumn:
         header = ("No.", "Laboratory Code")
         with pytest.raises(ValueError):
             find_column(header, "pH (H2O, 1:1)")
+
+
+class TestBuildTrainingRow:
+    def test_complete_row_computes_remarks_and_targets(self):
+        raw = {
+            "laboratory_code": "2022-SCC417", "crop": "Corn", "variety": None,
+            "cultivation_method": None, "age_band": None,
+            "ph": 6.4, "organic_matter_pct": 2.8, "phosphorus_ppm": 18.0,
+            "potassium_cmol_kg": 0.35, "total_nitrogen_pct": None,
+        }
+        row = build_training_row(raw)
+        assert row is not None
+        assert row["data_source"] == "lab"
+        assert row["crop"] == "Corn"
+        assert row["variety"] == "None"
+        assert row["cultivation_method"] == "None"
+        assert row["age_band"] == "None"
+        assert row["om_remark"] == "MODERATELY LOW"
+        assert row["target_unit"] == "kg_ha"
+        assert isinstance(row["target_n"], float)
+        assert row["target_n"] > 0
+
+    def test_k_remark_uses_the_converted_ppm_not_the_raw_cmol_kg(self):
+        """0.35 cmol/kg -> 136.85 ppm -> SUFFICIENT+. Feeding the raw 0.35
+        into derive_k_remark directly would misclassify it as DEFICIENT."""
+        raw = {
+            "laboratory_code": "2022-SCC417", "crop": "Corn", "variety": None,
+            "cultivation_method": None, "age_band": None,
+            "ph": 6.4, "organic_matter_pct": 2.8, "phosphorus_ppm": 18.0,
+            "potassium_cmol_kg": 0.35, "total_nitrogen_pct": None,
+        }
+        assert build_training_row(raw)["k_remark"] == "SUFFICIENT+"
+
+    def test_tree_crop_row_gets_kg_tree_unit(self):
+        raw = {
+            "laboratory_code": "2022-SCC5", "crop": "Coconut", "variety": None,
+            "cultivation_method": None, "age_band": "9yrs & up",
+            "ph": 6.5, "organic_matter_pct": 2.0, "phosphorus_ppm": 10.0,
+            "potassium_cmol_kg": 0.3, "total_nitrogen_pct": None,
+        }
+        row = build_training_row(raw)
+        assert row["target_unit"] == "kg_tree"
+
+    def test_total_nitrogen_derived_when_absent(self):
+        raw = {
+            "laboratory_code": "2022-SCC1", "crop": "Rice", "variety": "Hybrid",
+            "cultivation_method": None, "age_band": None,
+            "ph": 6.5, "organic_matter_pct": 2.0, "phosphorus_ppm": 10.0,
+            "potassium_cmol_kg": 0.3, "total_nitrogen_pct": None,
+        }
+        row = build_training_row(raw)
+        assert row["total_nitrogen_pct"] == pytest.approx(0.10)
+
+    def test_missing_om_or_phosphorus_or_potassium_returns_none(self):
+        """A real target needs numeric OM/P/K — nutrient_requirements() can't
+        run without them, and there's no real substitute (see the design
+        spec's "Data source scope" section for why this must not be
+        patched with an invented number)."""
+        base = {
+            "laboratory_code": "2022-SCC1", "crop": "Corn", "variety": None,
+            "cultivation_method": None, "age_band": None,
+            "ph": 6.5, "organic_matter_pct": 2.5, "phosphorus_ppm": 15.0,
+            "potassium_cmol_kg": 0.3, "total_nitrogen_pct": None,
+        }
+        for missing_field in ("organic_matter_pct", "phosphorus_ppm", "potassium_cmol_kg"):
+            incomplete = {**base, missing_field: None}
+            assert build_training_row(incomplete) is None
+
+    def test_variety_none_becomes_the_string_none(self):
+        raw = {
+            "laboratory_code": "2022-SCC1", "crop": "Cassava", "variety": None,
+            "cultivation_method": None, "age_band": None,
+            "ph": 6.5, "organic_matter_pct": 2.5, "phosphorus_ppm": 15.0,
+            "potassium_cmol_kg": 0.3, "total_nitrogen_pct": None,
+        }
+        assert build_training_row(raw)["variety"] == "None"
+
+
+class TestParseSheetIntegration:
+    """Exercises parse_sheet against a small in-memory workbook shaped like
+    the real Laboratory Details sheets, to catch column-mapping regressions
+    without depending on the actual multi-thousand-row source file."""
+
+    @pytest.fixture
+    def workbook(self, tmp_path):
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "Laboratory Details2022"
+        ws.cell(row=3, column=2, value="Laboratory Code")
+        ws.cell(row=3, column=15, value="Crops")
+        ws.cell(row=5, column=17, value="pH (H2O, 1:1)")
+        ws.cell(row=5, column=18, value="Available Phosphorus (Avail. P), mg/kg")
+        ws.cell(row=5, column=19, value="Exchangeable Potassium (K), cmol/kg")
+        ws.cell(row=5, column=20, value="Organic Matter (OM), %")
+        ws.cell(row=5, column=21, value="Total Nitrogen (N), %")
+        ws.cell(row=6, column=2, value="SCC 1")
+        ws.cell(row=6, column=15, value="Corn")
+        ws.cell(row=6, column=17, value=6.4)
+        ws.cell(row=6, column=18, value=18.0)
+        ws.cell(row=6, column=19, value=0.35)
+        ws.cell(row=6, column=20, value=2.8)
+        ws.cell(row=6, column=21, value=0.14)
+        # A row that was field-tested instead of lab-tested for phosphorus
+        ws.cell(row=7, column=2, value="SCC 2")
+        ws.cell(row=7, column=15, value="Rice Upland")
+        ws.cell(row=7, column=17, value=6.8)
+        ws.cell(row=7, column=18, value="STK")
+        ws.cell(row=7, column=19, value=0.4)
+        ws.cell(row=7, column=20, value=2.0)
+        # A multi-crop row that must be excluded
+        ws.cell(row=8, column=2, value="SCC 3")
+        ws.cell(row=8, column=15, value="Corn, Rice")
+        ws.cell(row=8, column=17, value=6.5)
+        ws.cell(row=8, column=18, value=15.0)
+        ws.cell(row=8, column=19, value=0.3)
+        ws.cell(row=8, column=20, value=2.5)
+        path = tmp_path / "test.xlsx"
+        wb.save(path)
+        loaded = openpyxl.load_workbook(path, read_only=True, data_only=True)
+        return loaded["Laboratory Details2022"]
+
+    def test_reads_the_complete_row(self, workbook):
+        config = {**SHEET_CONFIGS[0]}
+        rows = parse_sheet(workbook, config)
+        codes = {r["laboratory_code"] for r in rows}
+        assert "2022-SCC1" in codes
+
+    def test_excludes_multi_crop_rows(self, workbook):
+        config = {**SHEET_CONFIGS[0]}
+        rows = parse_sheet(workbook, config)
+        assert "2022-SCC3" not in {r["laboratory_code"] for r in rows}
+
+    def test_stk_flagged_phosphorus_is_none_not_a_string(self, workbook):
+        config = {**SHEET_CONFIGS[0]}
+        rows = parse_sheet(workbook, config)
+        scc2 = next(r for r in rows if r["laboratory_code"] == "2022-SCC2")
+        assert scc2["phosphorus_ppm"] is None
+
+    def test_stated_cultivation_method_is_captured(self, workbook):
+        config = {**SHEET_CONFIGS[0]}
+        rows = parse_sheet(workbook, config)
+        scc2 = next(r for r in rows if r["laboratory_code"] == "2022-SCC2")
+        assert scc2["cultivation_method"] == "Upland"
+
+
+class TestBuildTrainingRowDefaultResolution:
+    """The stored cultivation_method/age_band feature must match what
+    nutrient_requirements() actually resolved and used to compute the
+    target — not the raw unstated value. Storing the literal string "None"
+    for a Rice row whose target was silently computed against the
+    "Lowland Wet" default would desynchronize the feature from the label
+    the model is trained to predict."""
+
+    def test_rice_with_no_stated_cultivation_method_stores_the_resolved_default(self):
+        raw = {
+            "laboratory_code": "2022-SCC9", "crop": "Rice", "variety": None,
+            "cultivation_method": None, "age_band": None,
+            "ph": 6.5, "organic_matter_pct": 2.0, "phosphorus_ppm": 10.0,
+            "potassium_cmol_kg": 0.3, "total_nitrogen_pct": None,
+        }
+        assert build_training_row(raw)["cultivation_method"] == "Lowland Wet"
+
+    def test_coconut_with_no_stated_age_band_stores_the_bearing_default(self):
+        raw = {
+            "laboratory_code": "2022-SCC10", "crop": "Coconut", "variety": None,
+            "cultivation_method": None, "age_band": None,
+            "ph": 6.5, "organic_matter_pct": 2.0, "phosphorus_ppm": 10.0,
+            "potassium_cmol_kg": 0.3, "total_nitrogen_pct": None,
+        }
+        assert build_training_row(raw)["age_band"] == "9yrs & up"
