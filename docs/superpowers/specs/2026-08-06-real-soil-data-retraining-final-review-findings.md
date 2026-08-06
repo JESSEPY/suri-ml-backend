@@ -1,7 +1,8 @@
 # Real Soil Data Retraining — Final Whole-Branch Review Findings
 
-**Status: NOT production-ready. Paused here — resume by fixing the Critical items below, then
-re-running the final whole-branch review.**
+**Status: NOT production-ready. Fix work in progress** — see the implementation plan at
+`docs/superpowers/plans/2026-08-06-final-review-fixes.md`, which folds the architecture decision
+below into the fix for Critical #1/#2.
 
 ## Context
 
@@ -43,12 +44,14 @@ would read and act on. Also: of the 183 `kg_tree` rows in `suri_real_training_da
 `"X kg/ha"` string that actually means "X kg per tree" — so the classifier heads were trained on
 corrupted labels for every tree crop, not just serving them wrong at inference time.
 
-**Fix direction:** `_format_terms`/`plan_applications` need the unit passed in, with rounding that
-respects sub-1 amounts for `kg_tree` crops. Given the classifier heads were trained on already-bad
-`kg_tree` labels, this likely needs the training CSV regenerated and the model retrained after the
-formatting fix, not just a serving-layer patch. Consider whether `app*_formulation` should even be
-model-predicted for `kg_tree` crops, given how few and how noisy those labels are (see the
-architecture note at the bottom of this doc).
+**Fix direction:** given the architecture decision below (route complete requests to the exact
+table), `app1_formulation`/`app2_formulation` should become a deterministic function of
+`(n, p2o5, k2o, target_unit)` — converting a known nutrient amount into a bag-recipe string is
+arithmetic (exactly what the pptx's own worked examples do: `RR × product-%N` etc.), not something
+that needs a trained classifier at all, for either serving path. This removes the unit bug at the
+root (the formula gets `target_unit` as an explicit input) and the training-label noise problem
+(79 degenerate `"None"` labels) simultaneously, rather than just making the existing classifier
+unit-aware and re-training it on the same corrupted labels.
 
 ### 2. Zero training coverage for non-default `cultivation_method`/`age_band` values — API returns confident, badly wrong numbers
 
@@ -70,11 +73,9 @@ those one-hot columns because no training row ever set them. Recommending 1.1 kg
 seedling that needs 0.06 kg is real agronomic harm, on an input this whole task added specifically
 to *improve* accuracy.
 
-**Fix direction:** either reject uncovered `(crop, cultivation_method)`/`(crop, age_band)`
-combinations with a 422 until real training data exists for them, or — since
-`nutrient_requirements()` is already in-process and exact — serve the deterministic guide value
-directly for any combination with zero training coverage, instead of the model's extrapolation.
-Either way this needs to be an enforced, documented boundary, not silent.
+**Fix direction:** resolved by the architecture decision below — this stops being a
+coverage-tracking problem once complete-data requests are routed to the exact table instead of the
+model, since the table has no notion of "uncovered."
 
 ### 3. The Supabase migration corrupts pre-existing rows and destroys the ability to detect it
 
@@ -167,7 +168,10 @@ generator was retired. Not wrong code, but false justification left attached to 
   non-default `variety`/`cultivation_method`/`age_band` — consistent with the real corpus, but it
   means finding #2 above is structurally invisible to the test suite.
 
-## Architecture note worth a deliberate decision, not a quick fix
+## Architecture decision: route complete requests to the exact table, reserve the model for incomplete ones
+
+**Resolved** (discussed and agreed after the review — this directly subsumes the fix for Critical
+#2 and reframes Critical #1; see "How to resume" below for how it folds into the fix plan).
 
 Targets are now a *pure deterministic function* of `(crop, variety, cultivation_method, age_band,
 om, p, k)` via `nutrient_requirements()`. Training an ensemble to approximate that lookup table
@@ -177,24 +181,53 @@ well — overall MAE is 3.4-3.7 kg/ha, Tomato is 39.2 kg/ha, and even a *covered
 table above is literally the model disagreeing with a table it could just read directly. This
 branch made that mismatch sharper by replacing a fuzzy invented formula with an exact one.
 
-Worth a deliberate decision on whether the ML layer should remain in the target-prediction path at
-all, or whether it should be reserved for what it's actually suited for here — e.g. imputing a
-result when the requester's soil-test inputs are incomplete/noisy (the `stk`/`iot` missingness case
-this whole pipeline was already built around), while a complete, in-coverage request gets served
-the exact deterministic value. This doesn't block fixing findings 1-8 above, but it's worth
-resolving before investing more effort in model-quality tuning for a target the system can already
-compute exactly.
+**Why the ensemble exists at all, and why it still earns its place:** the model isn't redundant —
+it's mis-scoped. `nutrient_requirements()` needs numeric `organic_matter_pct` (OM) plus P and K to
+run at all. IoT probes and Rapid Soil Test Kits (`data_source` `iot`/`stk`) can read N/P/K/pH but
+**cannot measure OM** — that needs a real lab combustion/wet-oxidation test. So any IoT/STK
+request, and any partial `lab` submission (the source spreadsheet itself has plenty of real rows
+where one field was RSTK-tested even though the rest came from the lab — the exact pattern
+`data/parse_real_soil_database.py`'s sentinel handling was built around), structurally cannot run
+the deterministic lookup. That's the model's real, non-redundant job: producing a reasonable
+estimate when the exact inputs the table needs aren't all present.
+
+**Decision:** route on actual field completeness, not on the declared `data_source` string —
+`organic_matter_pct`, `phosphorus_ppm`, `potassium_cmol_kg` all present and numeric →
+`main.py` calls `nutrient_requirements()` directly (exact, zero model-approximation error, no
+training-coverage dependency, works even for crop/variety/cultivation_method/age_band
+combinations the corpus has zero rows for, since it's a computation, not a learned pattern);
+anything missing → fall through to the trained ensemble exactly as today. This is deliberately the
+same completeness rule `data/parse_real_soil_database.py`'s `build_training_row()` already uses to
+decide whether a row is trainable at all (`om is None or p is None or k is None: return None`) — a
+`lab`-labeled row that's actually incomplete already gets excluded from training for this reason;
+serving should treat it the same way it's already treated at training time.
+
+**Why this is the right cut, not a patch:** it structurally eliminates Critical #2 (an uncovered
+`cultivation_method`/`age_band` combination with complete OM/P/K now gets the exact guide answer,
+not a model guess) rather than requiring a 422/coverage-tracking band-aid, and it removes Tomato's
+17-row sample-size problem entirely for any complete-data request, since the table doesn't care how
+few rows trained the ensemble. It doesn't touch or deprecate the model — it puts it back in the one
+role it was actually designed for.
+
+**Low-cost to add:** `main.py`'s `PredictionResponse` already has a `source: str = "ml-ensemble"`
+field, currently hardcoded — it's already scaffolded to say which path answered a request; it just
+needs to actually vary (`"table-lookup"` vs `"ml-ensemble"`).
 
 ## How to resume
 
-1. Fix Critical #1-3, ideally in that order (#1 and #2 are both user-facing dosage errors; #3
-   blocks safely re-running Task 12's Supabase ingestion).
-2. Fix Important #4-8.
-3. Regenerate the training CSV and retrain (Critical #1's fix likely requires this, since the
-   `app*_formulation` classifier labels were trained on corrupted data).
-4. Re-run the full test suite and the Task 12 smoke test, this time explicitly covering a
-   non-default `cultivation_method`/`age_band` request (finding #2's exact gap) and a `kg_tree`
-   crop's `app*_formulation` (finding #1's exact gap) — the existing smoke test missed both.
-5. Re-run the final whole-branch review before considering this production-ready.
-6. Decide the architecture question above — doesn't block 1-5, but affects how much further
-   model-quality investment is worth making afterward.
+Being executed via `docs/superpowers/plans/2026-08-06-final-review-fixes.md`. Summary:
+
+1. Add the completeness router to `main.py` (complete OM/P/K → `nutrient_requirements()` directly;
+   otherwise → the existing model path) — this is the fix for Critical #2 and reframes Critical #1.
+2. Replace `ml/recipes.py`'s trained classifier heads with a deterministic
+   `(n, p2o5, k2o, target_unit)` → formulation formula — fixes Critical #1 at the root.
+3. Fix Critical #3 (the Supabase migration) — add the synthetic-row delete step and resolve the K
+   unit conversion for any pre-existing row.
+4. Fix Important #4-8 (README, `resolve_variety` crop-gating, the missing Coffee golden test, the
+   test suite writing to the production audit log, stale SCC-417 docstrings).
+5. Regenerate the training CSV and retrain if needed once #2 changes what the classifier heads are
+   trained on.
+6. Re-run the full test suite and an expanded smoke test — explicitly covering a non-default
+   `cultivation_method`/`age_band` request and a `kg_tree` crop's `app*_formulation`, both of which
+   the original Task 12 smoke test missed.
+7. Re-run the final whole-branch review before considering this production-ready.
