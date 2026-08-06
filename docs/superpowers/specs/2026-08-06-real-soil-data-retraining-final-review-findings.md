@@ -8,13 +8,12 @@ complete) and the verification notes below. Two things remain outside this fix's
    — applying it, then running `python -m data.ingest_to_supabase`, is a deliberate, separate
    action against shared production infrastructure, not something done automatically as part of
    this fix.
-2. **A new, out-of-scope discovery**: `lab-results-synthesizer.py` at the repo root is dead,
+2. ~~A new, out-of-scope discovery: `lab-results-synthesizer.py`...~~ **Resolved** — this was dead,
    disconnected reference material from the project's very first commit (predates this session
-   entirely) — never imported by any real code path, but still generates fake data against the
-   long-retired schema (`potassium_ppm`, the old 6-crop list, `SCC-26-{i}`-style lab codes — quite
-   possibly the actual origin of the `SCC-26-417-417` golden-record lab code, given the numbering
-   scheme). Flagged rather than deleted, since it predates this work and was explicitly labeled
-   "reference material" in the initial commit — worth an explicit decision, not a unilateral one.
+   entirely), never imported by any real code path, generating fake data against the long-retired
+   schema (quite possibly the actual origin of the `SCC-26-417-417` golden-record lab code, given
+   its `SCC-26-{i}`-style numbering). Flagged here, then removed with explicit user sign-off
+   (commit `954882b`); full suite stayed 228/228 after deletion, confirming it was truly unused.
 
 ## Verification (2026-08-06)
 
