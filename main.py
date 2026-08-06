@@ -19,7 +19,11 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, field_validator
 
-from data.crop_baselines import CROPS
+from data.mode_of_application import application_schedule_for_crop
+from data.nutrient_recommendation_guide import (
+    CROPS, k_cmol_to_ppm, resolve_age_band, resolve_cultivation_method,
+    resolve_variety, target_unit_for_crop,
+)
 from ml.agronomy import total_nitrogen_from_om
 from ml.preprocessing import FEATURE_COLUMNS
 from ml.remarks import (
@@ -43,12 +47,15 @@ app.add_middleware(
 
 class SoilTestRequest(BaseModel):
     crop: str
+    variety: str | None = None
+    cultivation_method: str | None = None
+    age_band: str | None = None
     data_source: Literal["lab", "stk", "iot"]
     ph: float = Field(ge=0, le=14)
     organic_matter_pct: float | None = Field(default=None, ge=0, le=100)
     total_nitrogen_pct: float | None = Field(default=None, ge=0)
     phosphorus_ppm: float | None = Field(default=None, ge=0)
-    potassium_ppm: float | None = Field(default=None, ge=0)
+    potassium_cmol_kg: float | None = Field(default=None, ge=0)
     temp: float | None = None
     moist: float | None = Field(default=None, ge=0, le=100)
     ec: float | None = Field(default=None, ge=0)
@@ -72,11 +79,13 @@ class FarmTotals(BaseModel):
 
 
 class PredictionResponse(BaseModel):
-    target_n_kg_ha: float
-    target_p2o5_kg_ha: float
-    target_k2o_kg_ha: float
+    target_n: float
+    target_p2o5: float
+    target_k2o: float
+    target_unit: str
     app1_formulation: str
     app2_formulation: str
+    application_schedule: str | None
     derived_remarks: dict[str, str]
     farm_totals: FarmTotals | None
     model_version: str
@@ -131,19 +140,24 @@ def _build_feature_row(request: SoilTestRequest) -> pd.DataFrame:
     if total_nitrogen is None and organic_matter is not None:
         total_nitrogen = total_nitrogen_from_om(organic_matter)
 
+    k_ppm = k_cmol_to_ppm(request.potassium_cmol_kg) if request.potassium_cmol_kg is not None else None
+
     row = {
         "ph": request.ph,
         "organic_matter_pct": organic_matter,
         "total_nitrogen_pct": total_nitrogen,
         "phosphorus_ppm": request.phosphorus_ppm,
-        "potassium_ppm": request.potassium_ppm,
+        "potassium_cmol_kg": request.potassium_cmol_kg,
         "temp": request.temp, "moist": request.moist,
         "ec": request.ec, "sal": request.sal,
         "ph_remark": derive_ph_remark(request.ph),
         "om_remark": derive_om_remark(organic_matter),
         "p_remark": derive_p_remark(request.phosphorus_ppm),
-        "k_remark": derive_k_remark(request.potassium_ppm),
+        "k_remark": derive_k_remark(k_ppm),
         "crop": request.crop,
+        "variety": resolve_variety(request.crop, request.variety),
+        "cultivation_method": resolve_cultivation_method(request.crop, request.cultivation_method),
+        "age_band": resolve_age_band(request.crop, request.age_band),
         "data_source": request.data_source,
     }
     return pd.DataFrame([row])[FEATURE_COLUMNS]
@@ -176,18 +190,22 @@ def predict(request: SoilTestRequest) -> PredictionResponse:
         raise HTTPException(status_code=422, detail=str(error))
 
     n, p2o5, k2o = ARTIFACTS["regressor"].predict(X)[0]
-    n, p2o5, k2o = round(float(n), 1), round(float(p2o5), 1), round(float(k2o), 1)
+    n, p2o5, k2o = round(float(n), 3), round(float(p2o5), 3), round(float(k2o), 3)
 
     app1 = ARTIFACTS["encoders"]["app1_formulation"].inverse_transform(
         ARTIFACTS["clf_app1"].predict(X))[0]
     app2 = ARTIFACTS["encoders"]["app2_formulation"].inverse_transform(
         ARTIFACTS["clf_app2"].predict(X))[0]
 
+    target_unit = target_unit_for_crop(request.crop)
+
     farm_totals = None
-    if request.farm_area_sqm:
+    if request.farm_area_sqm and target_unit == "kg_ha":
         # Derived from the rounded per-hectare rates, not the raw regressor
         # output, so the displayed totals always reconcile with the displayed
-        # per-hectare figures a farmer would multiply by hand.
+        # per-hectare figures a farmer would multiply by hand. Not attempted
+        # for kg_tree crops — that needs a tree count, which this API
+        # doesn't collect, not a hectare figure.
         hectares = request.farm_area_sqm / SQM_PER_HECTARE
         farm_totals = FarmTotals(
             area_ha=round(hectares, 4),
@@ -197,11 +215,13 @@ def predict(request: SoilTestRequest) -> PredictionResponse:
         )
 
     response = PredictionResponse(
-        target_n_kg_ha=n,
-        target_p2o5_kg_ha=p2o5,
-        target_k2o_kg_ha=k2o,
+        target_n=n,
+        target_p2o5=p2o5,
+        target_k2o=k2o,
+        target_unit=target_unit,
         app1_formulation=str(app1),
         app2_formulation=str(app2),
+        application_schedule=application_schedule_for_crop(request.crop),
         derived_remarks={
             "ph_remark": features.at[0, "ph_remark"],
             "om_remark": features.at[0, "om_remark"],
