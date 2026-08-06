@@ -67,9 +67,17 @@ class TestTrain:
 
     def test_writes_all_artifacts(self, result):
         _, output = result
-        for name in ["preprocessor.joblib", "regressor.joblib", "clf_app1.joblib",
-                     "clf_app2.joblib", "label_encoders.joblib", "metadata.json"]:
+        for name in ["preprocessor.joblib", "regressor.joblib", "metadata.json"]:
             assert (output / name).exists()
+
+    def test_no_longer_writes_classifier_artifacts(self, result):
+        """The classifier heads were removed -- app1/app2_formulation is now
+        computed directly by ml.recipes.plan_applications(), not predicted.
+        This test exists so a future change can't silently reintroduce the
+        classifier-training path without a deliberate decision to do so."""
+        _, output = result
+        for name in ["clf_app1.joblib", "clf_app2.joblib", "label_encoders.joblib"]:
+            assert not (output / name).exists()
 
     def test_metadata_records_provenance(self, result):
         metadata, output = result
@@ -78,6 +86,11 @@ class TestTrain:
         assert written["n_rows"] == 200
         assert "trained_at" in written
         assert "version" in written
+
+    def test_metadata_has_no_classification_keys(self, result):
+        metadata, _ = result
+        assert "classification_metrics" not in metadata
+        assert "recipe_vocabulary" not in metadata
 
     def test_reports_metrics_per_data_source(self, result):
         metadata, _ = result

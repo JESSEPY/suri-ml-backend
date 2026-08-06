@@ -22,17 +22,15 @@ import joblib
 import numpy as np
 import pandas as pd
 from sklearn.dummy import DummyRegressor
-from sklearn.metrics import accuracy_score, f1_score, mean_absolute_error, r2_score
+from sklearn.metrics import mean_absolute_error, r2_score
 from sklearn.model_selection import GroupKFold, GroupShuffleSplit
-from sklearn.preprocessing import LabelEncoder
 
-from ml.model import EnsembleFertilizerRegressor, LogTargetRegressor, build_classifier, build_krr, build_xgb_regressor
+from ml.model import EnsembleFertilizerRegressor, LogTargetRegressor, build_krr, build_xgb_regressor
 from ml.preprocessing import FEATURE_COLUMNS, TARGET_COLUMNS, build_preprocessor
 
 RANDOM_SEED = 42
 ARTIFACT_ROOT = "ml/artifacts"
 GROUP_COLUMN = "laboratory_code"
-CLASSIFIER_TARGETS = ["app1_formulation", "app2_formulation"]
 
 
 def grouped_split(frame: pd.DataFrame, seed: int = RANDOM_SEED):
@@ -128,48 +126,6 @@ def train(frame: pd.DataFrame, output_dir: str | None = None, seed: int = RANDOM
         X_train, y_train,
     )
 
-    # Classification heads. Note these will score near-perfectly on covered
-    # classes: the recipe is a deterministic function of the targets, so the
-    # classifier only rediscovers arithmetic. That is not evidence of
-    # real-world skill — it becomes meaningful only on real DA data where
-    # agronomists exercise judgment.
-    #
-    # Formulation strings are near-unique per record (continuous kg amounts),
-    # so the grouped train split cannot cover every class — the encoder is
-    # fit on train_df only, matching exactly what XGBClassifier sees, and
-    # held-out metrics are computed only over the subset of test labels the
-    # model actually saw at train time (see test_coverage).
-    encoders: dict[str, LabelEncoder] = {}
-    classifiers = {}
-    classification_metrics = {}
-    for target in CLASSIFIER_TARGETS:
-        encoder = LabelEncoder().fit(train_df[target])
-        model = build_classifier().fit(X_train, encoder.transform(train_df[target]))
-
-        known_mask = test_df[target].isin(encoder.classes_).to_numpy()
-        coverage = float(known_mask.mean()) if len(test_df) else 0.0
-        if known_mask.any():
-            actual = encoder.transform(test_df[target][known_mask])
-            predicted = model.predict(X_test[known_mask])
-            accuracy = float(accuracy_score(actual, predicted))
-            macro_f1 = float(f1_score(actual, predicted, average="macro"))
-        else:
-            accuracy = None
-            macro_f1 = None
-
-        encoders[target] = encoder
-        classifiers[target] = model
-        classification_metrics[target] = {
-            "accuracy": accuracy,
-            "macro_f1": macro_f1,
-            "n_classes": int(len(encoder.classes_)),
-            "test_coverage": coverage,
-            "note": "Deterministic given the targets — not a V1 success signal. "
-                    "Formulations are near-unique per record; metrics cover only "
-                    "the test_coverage fraction of test rows whose label was seen "
-                    "in training.",
-        }
-
     metadata = {
         "version": version,
         "trained_at": datetime.now(timezone.utc).isoformat(),
@@ -179,17 +135,10 @@ def train(frame: pd.DataFrame, output_dir: str | None = None, seed: int = RANDOM
         "split_sizes": {"train": len(train_df), "val": len(val_df), "test": len(test_df)},
         "voting_weights": [{"xgb": xgb, "krr": krr} for xgb, krr in weights],
         "metrics": metrics,
-        "classification_metrics": classification_metrics,
-        "recipe_vocabulary": {
-            target: encoders[target].classes_.tolist() for target in CLASSIFIER_TARGETS
-        },
     }
 
     joblib.dump(preprocessor, os.path.join(output_dir, "preprocessor.joblib"))
     joblib.dump(regressor, os.path.join(output_dir, "regressor.joblib"))
-    joblib.dump(classifiers["app1_formulation"], os.path.join(output_dir, "clf_app1.joblib"))
-    joblib.dump(classifiers["app2_formulation"], os.path.join(output_dir, "clf_app2.joblib"))
-    joblib.dump(encoders, os.path.join(output_dir, "label_encoders.joblib"))
     with open(os.path.join(output_dir, "metadata.json"), "w") as handle:
         json.dump(metadata, handle, indent=2)
 
