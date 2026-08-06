@@ -78,3 +78,29 @@ class EnsembleFertilizerRegressor(BaseEstimator, RegressorMixin):
 
     def predict(self, X):
         return np.column_stack([model.predict(X) for model in self.models_])
+
+
+class LogTargetRegressor:
+    """Wraps any (fit(X, y) / predict(X) / models_) regressor to fit and
+    predict in log1p space, transparently inverse-transforming predictions
+    back to the original scale via expm1.
+
+    Needed once targets span both kg/ha (~20-300) and kg/tree (~0.003-2)
+    scales in the same columns (Coconut/Cacao/Mango/Banana vs. the field
+    crops) -- without this, a shared loss function is dominated by the
+    larger-scale rows and silently starves the tree-crop predictions.
+    """
+
+    def __init__(self, base_regressor):
+        self._base = base_regressor
+
+    def fit(self, X, y):
+        self._base.fit(X, np.log1p(y))
+        return self
+
+    def predict(self, X):
+        return np.expm1(self._base.predict(X))
+
+    @property
+    def models_(self):
+        return self._base.models_

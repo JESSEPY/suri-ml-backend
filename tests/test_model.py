@@ -70,6 +70,42 @@ class TestEnsembleRegressor:
             EnsembleFertilizerRegressor().fit(X, y[:, 0])
 
 
+class TestLogTargetRegressor:
+    def test_predictions_are_in_the_original_scale_not_log_scale(self, dataset):
+        """The wrapped model is fit on log1p(y) internally, but predict()
+        must return real, expm1'd values — a caller with no knowledge of
+        the wrapper must see the same kind of numbers either way."""
+        X, y = dataset
+        from ml.model import LogTargetRegressor
+        wrapped = LogTargetRegressor(EnsembleFertilizerRegressor()).fit(X, y)
+        predicted = wrapped.predict(X)
+        assert predicted.shape == y.shape
+        # y in this fixture ranges roughly 15-85; log1p of that range is
+        # roughly 2.7-4.5 — a prediction still in log-space would be wildly
+        # out of range, not just imprecise.
+        assert predicted.min() > 5.0
+
+    def test_handles_a_target_close_to_zero(self):
+        """The smallest real targets in this system are ~0.003 (kg/tree,
+        young Cacao) -- log1p/expm1 must round-trip near-zero values
+        without producing negatives or NaNs."""
+        from ml.model import LogTargetRegressor
+        X = RNG.uniform(-1, 1, size=(60, 3))
+        y = np.column_stack([
+            np.full(60, 0.003), np.full(60, 0.01), np.full(60, 0.002),
+        ])
+        wrapped = LogTargetRegressor(EnsembleFertilizerRegressor()).fit(X, y)
+        predicted = wrapped.predict(X)
+        assert np.all(predicted >= 0)
+        assert not np.any(np.isnan(predicted))
+
+    def test_exposes_the_wrapped_models_attribute(self, dataset):
+        X, y = dataset
+        from ml.model import LogTargetRegressor
+        wrapped = LogTargetRegressor(EnsembleFertilizerRegressor()).fit(X, y)
+        assert len(wrapped.models_) == 3
+
+
 class TestComponentBuilders:
     def test_xgb_regressor_is_seeded(self):
         assert build_xgb_regressor().random_state == 42
