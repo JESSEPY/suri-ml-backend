@@ -10,8 +10,16 @@ __pycache__/
 # Generated data — reproducible from the seeded generator, not committed
 *.csv
 
-# Trained model artifacts — reproducible via ml/train.py
-ml/artifacts/
+# Trained model artifacts — reproducible via ml/train.py, EXCEPT the one
+# version pinned below: main.py loads the latest artifact directory at
+# import time (boot-time, not per-request), so Render needs a real model
+# on disk the moment it clones this repo, and training data (*.csv, also
+# gitignored above) isn't committed for it to retrain from on deploy.
+# If you retrain and want the new version deployed, update the pinned
+# path here to match, then commit the new (small) artifact directory.
+ml/artifacts/*
+!ml/artifacts/2026-08-06-055755/
+!ml/artifacts/2026-08-06-055755/**
 
 # Virtual environments
 .venv/
