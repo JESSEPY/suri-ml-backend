@@ -15,7 +15,7 @@ from typing import Literal
 
 import joblib
 import pandas as pd
-from fastapi import FastAPI, HTTPException
+from fastapi import BackgroundTasks, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, field_validator
 
@@ -142,6 +142,19 @@ def log_prediction(request: SoilTestRequest, response: PredictionResponse) -> No
     }).execute()
 
 
+def _log_prediction_safe(request: SoilTestRequest, response: PredictionResponse) -> None:
+    # An audit-log outage must never deny a farmer their recommendation --
+    # scheduled as a background task (runs after the response is already
+    # sent) so it no longer blocks the request on Supabase's network
+    # latency, measured at ~3.3s per call vs. ~0.23s for the actual model
+    # inference. See docs/superpowers/specs/2026-08-11-report-generation-
+    # speed-design.md Finding 6 in the sibling `suri` repo.
+    try:
+        log_prediction(request, response)
+    except Exception as error:
+        logger.warning("Prediction logging failed (returning result anyway): %s", error)
+
+
 def _build_feature_row(request: SoilTestRequest) -> pd.DataFrame:
     organic_matter = request.organic_matter_pct
     total_nitrogen = request.total_nitrogen_pct
@@ -189,7 +202,7 @@ def health() -> dict:
 
 
 @app.post("/predict", response_model=PredictionResponse)
-def predict(request: SoilTestRequest) -> PredictionResponse:
+def predict(request: SoilTestRequest, background_tasks: BackgroundTasks) -> PredictionResponse:
     features = _build_feature_row(request)
 
     if request.is_complete():
@@ -256,10 +269,6 @@ def predict(request: SoilTestRequest) -> PredictionResponse:
         source=source,
     )
 
-    # An audit-log outage must never deny a farmer their recommendation.
-    try:
-        log_prediction(request, response)
-    except Exception as error:
-        logger.warning("Prediction logging failed (returning result anyway): %s", error)
+    background_tasks.add_task(_log_prediction_safe, request, response)
 
     return response
