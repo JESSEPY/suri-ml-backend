@@ -92,6 +92,7 @@ def evaluate(model, X, y, sources, crops, X_train, y_train) -> dict:
                 name: {
                     "mae": float(mean_absolute_error(y[mask, index], predicted[mask, index])),
                     "r2": float(r2_score(y[mask, index], predicted[mask, index])),
+                    "mean_actual": float(np.mean(y[mask, index])),
                 }
                 for index, name in enumerate(TARGET_COLUMNS)
             }
