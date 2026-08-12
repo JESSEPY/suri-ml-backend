@@ -8,6 +8,7 @@ for a different, unrelated crop-capability contract.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 from datetime import datetime, timezone
@@ -25,6 +26,10 @@ from data.nutrient_recommendation_guide import (
     resolve_cultivation_method, resolve_variety, target_unit_for_crop,
 )
 from ml.agronomy import total_nitrogen_from_om
+from ml.confidence import (
+    DISAGREEMENT_DOWNGRADE_THRESHOLD, TIER_PCT_CEILING,
+    confidence_from_metrics, downgrade_tier,
+)
 from ml.preprocessing import FEATURE_COLUMNS
 from ml.recipes import plan_applications
 from ml.remarks import (
@@ -89,6 +94,11 @@ class FarmTotals(BaseModel):
     k2o_kg: float
 
 
+class Confidence(BaseModel):
+    tier: Literal["high", "fair", "limited"]
+    pct: int
+
+
 class PredictionResponse(BaseModel):
     target_n: float
     target_p2o5: float
@@ -101,6 +111,7 @@ class PredictionResponse(BaseModel):
     farm_totals: FarmTotals | None
     model_version: str
     source: str
+    confidence: Confidence | None
 
 
 def latest_version() -> str:
@@ -120,10 +131,13 @@ def load_artifacts() -> dict:
     than surfacing as a 500 on every request, or silently serving a stale model."""
     version = latest_version()
     directory = os.path.join(ARTIFACT_ROOT, version)
+    with open(os.path.join(directory, "metadata.json")) as handle:
+        metadata = json.load(handle)
     return {
         "version": version,
         "preprocessor": joblib.load(os.path.join(directory, "preprocessor.joblib")),
         "regressor": joblib.load(os.path.join(directory, "regressor.joblib")),
+        "metadata": metadata,
     }
 
 
@@ -184,6 +198,46 @@ def _build_feature_row(request: SoilTestRequest) -> pd.DataFrame:
     return pd.DataFrame([row])[FEATURE_COLUMNS]
 
 
+_TARGET_KEYS = ("target_n", "target_p2o5", "target_k2o")
+
+
+def _compute_confidence(crop: str, X) -> Confidence | None:
+    """Tier 1: this crop's historical held-out accuracy for the worst
+    (lowest-confidence) of the three targets, since a report shows all
+    three together and the weakest one is what should drive trust. Tier 2:
+    if the two sub-models disagree a lot on THIS specific input, downgrade
+    one level regardless of the crop's historical track record -- see
+    docs/superpowers/specs/2026-08-12-ml-prediction-confidence-design.md."""
+    crop_metrics = ARTIFACTS["metadata"].get("metrics", {}).get("by_crop", {}).get(crop)
+    if not crop_metrics:
+        return None
+
+    tiers_and_pcts = [
+        confidence_from_metrics(crop_metrics[key]["mae"], crop_metrics[key]["mean_actual"])
+        for key in _TARGET_KEYS
+        if key in crop_metrics
+    ]
+    if not tiers_and_pcts:
+        return None
+
+    tier_rank = {"high": 2, "fair": 1, "limited": 0}
+    worst_tier, worst_pct = min(tiers_and_pcts, key=lambda pair: tier_rank[pair[0]])
+
+    max_disagreement = 0.0
+    for voter in ARTIFACTS["regressor"].models_:
+        xgb_log_pred = voter.named_estimators_["xgb"].predict(X)[0]
+        krr_log_pred = voter.named_estimators_["krr"].predict(X)[0]
+        blended_log_pred = voter.predict(X)[0]
+        disagreement = abs(xgb_log_pred - krr_log_pred) / max(abs(blended_log_pred), 1e-6)
+        max_disagreement = max(max_disagreement, disagreement)
+
+    if max_disagreement > DISAGREEMENT_DOWNGRADE_THRESHOLD:
+        worst_tier = downgrade_tier(worst_tier)
+        worst_pct = min(worst_pct, TIER_PCT_CEILING[worst_tier])
+
+    return Confidence(tier=worst_tier, pct=worst_pct)
+
+
 @app.get("/health")
 def health() -> dict:
     supabase_reachable = True
@@ -227,6 +281,7 @@ def predict(request: SoilTestRequest, background_tasks: BackgroundTasks) -> Pred
                 detail=f"Unrecognized age_band {request.age_band!r} for crop {request.crop!r}: {error}",
             )
         source = "table-lookup"
+        confidence = None
     else:
         try:
             X = ARTIFACTS["preprocessor"].transform(features)
@@ -235,6 +290,7 @@ def predict(request: SoilTestRequest, background_tasks: BackgroundTasks) -> Pred
         n, p2o5, k2o = ARTIFACTS["regressor"].predict(X)[0]
         n, p2o5, k2o = float(n), float(p2o5), float(k2o)
         source = "ml-ensemble"
+        confidence = _compute_confidence(request.crop, X)
 
     n, p2o5, k2o = round(n, 3), round(p2o5, 3), round(k2o, 3)
     target_unit = target_unit_for_crop(request.crop)
@@ -267,6 +323,7 @@ def predict(request: SoilTestRequest, background_tasks: BackgroundTasks) -> Pred
         farm_totals=farm_totals,
         model_version=ARTIFACTS["version"],
         source=source,
+        confidence=confidence,
     )
 
     background_tasks.add_task(_log_prediction_safe, request, response)
