@@ -106,6 +106,16 @@ class TestTrain:
         assert set(metadata["metrics"]["by_crop"].keys()) <= set(CROPS)
         assert len(metadata["metrics"]["by_crop"]) > 0
 
+    def test_reports_mean_actual_per_crop_target(self, result):
+        """Needed to normalize MAE into a relative error (MAE / mean_actual)
+        for the confidence feature — see
+        docs/superpowers/specs/2026-08-12-ml-prediction-confidence-design.md."""
+        metadata, _ = result
+        for crop_metrics in metadata["metrics"]["by_crop"].values():
+            for target_metrics in crop_metrics.values():
+                assert "mean_actual" in target_metrics
+                assert isinstance(target_metrics["mean_actual"], float)
+
     def test_beats_the_mean_baseline_on_every_target(self, result):
         metadata, _ = result
         for target, scores in metadata["metrics"]["overall"].items():

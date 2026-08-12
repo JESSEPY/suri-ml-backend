@@ -122,6 +122,22 @@ class TestCompletenessRouter:
         body = client.post("/predict", json=payload).json()
         assert body["source"] == "ml-ensemble"
 
+    def test_table_lookup_has_no_confidence(self, client):
+        body = client.post("/predict", json=SAMPLE_PAYLOAD).json()
+        assert body["source"] == "table-lookup"
+        assert body["confidence"] is None
+
+    def test_ml_ensemble_reports_a_confidence_tier_and_pct(self, client):
+        # Same pattern test_incomplete_request_reports_ml_ensemble_source
+        # already uses: drop phosphorus_ppm entirely so is_complete() is
+        # False and the request routes to ml-ensemble.
+        payload = {key: value for key, value in SAMPLE_PAYLOAD.items()
+                   if key != "phosphorus_ppm"}
+        body = client.post("/predict", json=payload).json()
+        assert body["source"] == "ml-ensemble"
+        assert body["confidence"]["tier"] in {"high", "fair", "limited"}
+        assert 5 <= body["confidence"]["pct"] <= 100
+
     def test_complete_request_matches_nutrient_requirements_exactly(self, client):
         """The whole point of the router: for a complete request, /predict's
         answer must be bit-for-bit what the deterministic table says, not a
