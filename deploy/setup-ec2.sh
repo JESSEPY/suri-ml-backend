@@ -60,3 +60,7 @@ fi
 echo "Done. Edit $APP_DIR/.env if you haven't, then: sudo systemctl restart suri-ml"
 echo "Check status: sudo systemctl status suri-ml"
 echo "Check health: curl -s localhost:8001/health"
+echo ""
+echo "Not done yet -- see deploy/README.md:"
+echo "  3. Generate a second deploy key so GitHub Actions can SSH in (EC2_HOST/EC2_SSH_KEY secrets)"
+echo "  4. Set ML_API_KEY in .env before opening port 8001, or /predict is unauthenticated on the open internet"
