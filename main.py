@@ -16,7 +16,7 @@ from typing import Literal
 
 import joblib
 import pandas as pd
-from fastapi import BackgroundTasks, FastAPI, HTTPException
+from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, field_validator
 
@@ -49,6 +49,19 @@ app.add_middleware(
     allow_methods=["GET", "POST"],
     allow_headers=["*"],
 )
+
+# Unset in local dev / CI (no ML_API_KEY in the environment) means /predict
+# stays open, same as before this check existed -- tests and localhost
+# usage need no header. Set it in production so the endpoint isn't public
+# once it's reachable from outside the instance.
+ML_API_KEY = os.environ.get("ML_API_KEY")
+if not ML_API_KEY:
+    logger.warning("ML_API_KEY is not set -- /predict is unauthenticated.")
+
+
+def require_api_key(x_api_key: str | None = Header(None, alias="X-API-Key")) -> None:
+    if ML_API_KEY and x_api_key != ML_API_KEY:
+        raise HTTPException(status_code=401, detail="Invalid or missing X-API-Key")
 
 
 class SoilTestRequest(BaseModel):
@@ -255,7 +268,7 @@ def health() -> dict:
     }
 
 
-@app.post("/predict", response_model=PredictionResponse)
+@app.post("/predict", response_model=PredictionResponse, dependencies=[Depends(require_api_key)])
 def predict(request: SoilTestRequest, background_tasks: BackgroundTasks) -> PredictionResponse:
     features = _build_feature_row(request)
 
