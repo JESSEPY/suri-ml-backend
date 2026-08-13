@@ -4,13 +4,21 @@
 # after that, deploys happen via .github/workflows/deploy.yml (git pull +
 # systemctl restart), not by re-running this script.
 #
-# Usage: ssh onto the instance, then:
-#   curl -fsSL https://raw.githubusercontent.com/JESSEPY/suri-ml-backend/main/deploy/setup-ec2.sh | bash
-# or copy the repo over first and run it from deploy/setup-ec2.sh directly.
+# This repo is private, so plain `curl`ing the raw file (or an HTTPS clone)
+# 404s -- GitHub returns 404, not 403, for unauthenticated access to private
+# repos. Before running this script, generate a deploy key on the instance
+# and add it (read-only) at github.com/JESSEPY/suri-ml-backend/settings/keys:
+#   ssh-keygen -t ed25519 -C "suri-ml-ec2-deploy" -f ~/.ssh/id_ed25519 -N ""
+#   cat ~/.ssh/id_ed25519.pub
+#   ssh -T git@github.com   # accept the host key, confirms auth works
+#
+# Then clone with SSH and run this script from inside the clone:
+#   git clone git@github.com:JESSEPY/suri-ml-backend.git /opt/suri-ml-backend
+#   cd /opt/suri-ml-backend && bash deploy/setup-ec2.sh
 
 set -euo pipefail
 
-REPO_URL="https://github.com/JESSEPY/suri-ml-backend.git"
+REPO_URL="git@github.com:JESSEPY/suri-ml-backend.git"
 APP_DIR="/opt/suri-ml-backend"
 
 sudo apt-get update
@@ -19,8 +27,11 @@ sudo apt-get install -y python3.12-venv git
 if [ -d "$APP_DIR" ]; then
   echo "$APP_DIR already exists, skipping clone. Pull manually if you need to update it."
 else
-  sudo git clone "$REPO_URL" "$APP_DIR"
-  sudo chown -R "$USER:$USER" "$APP_DIR"
+  # Clone as the invoking user, not root -- the SSH deploy key lives in
+  # this user's ~/.ssh, and root has no access to it.
+  sudo mkdir -p "$APP_DIR"
+  sudo chown "$USER:$USER" "$APP_DIR"
+  git clone "$REPO_URL" "$APP_DIR"
 fi
 
 cd "$APP_DIR"

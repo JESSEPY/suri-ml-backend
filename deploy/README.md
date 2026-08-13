@@ -14,11 +14,33 @@ One-time setup, then GitHub Actions handles every push to `main`.
 
 ## 2. Bootstrap the instance (once)
 
-SSH in as `ubuntu`, then run `deploy/setup-ec2.sh` (see its header comment
-for the one-liner). It clones the repo to `/opt/suri-ml-backend`, creates a
-venv, installs a systemd unit (`deploy/suri-ml.service`), and grants the
+This repo is **private**, so a plain `curl`/HTTPS clone from the instance
+404s (GitHub returns 404, not 403, for unauthenticated access to private
+repos — this bit us once already). Set up a read-only deploy key first:
+
+```bash
+ssh-keygen -t ed25519 -C "suri-ml-ec2-deploy" -f ~/.ssh/id_ed25519 -N ""
+cat ~/.ssh/id_ed25519.pub
+```
+
+Add the printed key at
+`github.com/JESSEPY/suri-ml-backend/settings/keys` → **Add deploy key**,
+leaving "Allow write access" unchecked. Then confirm it works and clone:
+
+```bash
+ssh -T git@github.com   # type yes at the host-key prompt
+git clone git@github.com:JESSEPY/suri-ml-backend.git /opt/suri-ml-backend
+```
+
+Now run `deploy/setup-ec2.sh` from inside the clone (it detects the
+directory already exists and skips straight to setup). It creates a venv,
+installs a systemd unit (`deploy/suri-ml.service`), and grants the
 `ubuntu` user passwordless sudo scoped to *only*
 `systemctl restart suri-ml` — nothing broader.
+
+The same deploy key is what GitHub Actions' SSH deploy step relies on too
+— it runs `git fetch`/`git reset --hard` as the `ubuntu` user on the
+instance, which picks up `~/.ssh/id_ed25519` automatically.
 
 After it runs, fill in `/opt/suri-ml-backend/.env` with `SUPABASE_URL` and
 `SUPABASE_SERVICE_ROLE_KEY` (copy from `suri/.env.local` — shared Supabase
