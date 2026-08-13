@@ -1,0 +1,40 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  test-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - run: pip install -r requirements.txt
+
+      - run: pytest
+        env:
+          # Dummy values so any accidental client construction at import
+          # time doesn't fail CI -- tests don't hit a real Supabase project.
+          SUPABASE_URL: https://example.invalid
+          SUPABASE_SERVICE_ROLE_KEY: test-key
+
+      - name: Deploy to EC2
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ubuntu
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script: |
+            set -euo pipefail
+            cd /opt/suri-ml-backend
+            git fetch origin main
+            git reset --hard origin/main
+            .venv/bin/pip install -r requirements.txt
+            sudo systemctl restart suri-ml
+            sleep 3
+            curl -f http://localhost:8001/health
