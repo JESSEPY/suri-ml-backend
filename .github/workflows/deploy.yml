@@ -36,5 +36,10 @@ jobs:
             git reset --hard origin/main
             .venv/bin/pip install -r requirements.txt
             sudo systemctl restart suri-ml
-            sleep 3
-            curl -f http://localhost:8001/health
+            for i in $(seq 1 15); do
+              curl -sf http://localhost:8001/health && exit 0
+              sleep 2
+            done
+            echo "Service did not become healthy in time" >&2
+            journalctl -u suri-ml -n 50 --no-pager
+            exit 1
