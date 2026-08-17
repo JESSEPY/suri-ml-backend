@@ -39,7 +39,7 @@ class TestHealth:
 class TestPredict:
     def test_returns_expected_shape(self, client):
         body = client.post("/predict", json=SAMPLE_PAYLOAD).json()
-        for field in ["target_n", "target_p2o5", "target_k2o", "target_unit",
+        for field in ["target_n", "target_p2o5", "target_k2o", "max_total_need", "target_unit",
                       "app1_formulation", "app2_formulation", "application_schedule",
                       "derived_remarks", "model_version", "source"]:
             assert field in body
@@ -187,6 +187,22 @@ class TestCompletenessRouter:
         assert body["target_unit"] == "kg_tree"
         assert "kg/tree" in body["app1_formulation"]
         assert "kg/ha" not in body["app1_formulation"]
+
+    def test_max_total_need_matches_the_guide_function(self, client):
+        from data.nutrient_recommendation_guide import max_total_need
+        body = client.post("/predict", json=SAMPLE_PAYLOAD).json()
+        assert body["max_total_need"] == pytest.approx(max_total_need("Corn"))
+
+    def test_max_total_need_present_and_consistent_on_the_ml_ensemble_branch(self, client):
+        """A fixed crop-config property, not soil-dependent -- must be the
+        same value whether the request routed to table-lookup or
+        ml-ensemble."""
+        from data.nutrient_recommendation_guide import max_total_need
+        payload = {key: value for key, value in SAMPLE_PAYLOAD.items()
+                   if key != "phosphorus_ppm"}
+        body = client.post("/predict", json=payload).json()
+        assert body["source"] == "ml-ensemble"
+        assert body["max_total_need"] == pytest.approx(max_total_need("Corn"))
 
     def test_unrecognized_age_band_is_rejected_not_a_500(self, client):
         """Unlike variety/cultivation_method (which degrade gracefully to a

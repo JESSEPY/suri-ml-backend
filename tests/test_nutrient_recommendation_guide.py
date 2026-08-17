@@ -3,6 +3,7 @@ import pytest
 from data.nutrient_recommendation_guide import (
     CROPS, k_cmol_to_ppm, target_unit_for_crop, resolve_variety,
     resolve_cultivation_method, resolve_age_band, nutrient_requirements,
+    max_total_need,
 )
 
 
@@ -147,3 +148,62 @@ class TestGoldenRecordRiceInbred:
         )
         assert n == 90
         assert p == 60
+
+
+class TestMaxTotalNeed:
+    """max_total_need is the worst-case (poorest-soil) total N+P2O5+K2O for
+    a crop config -- a fixed property of that crop's guide row, independent
+    of any soil reading. It normalizes nutrient_requirements()'s soil-driven
+    total into a 0-1 fraction of the crop's own range, so crops with very
+    different absolute scales (e.g. Peanut vs. Tomato) can't be compared by
+    raw kg/ha magnitude."""
+
+    def test_known_value_peanut(self):
+        # Peanut|None bands: om max 10, p max 40, k max 45 -> 95.
+        assert max_total_need("Peanut") == 95
+
+    def test_known_value_rice_lowland_wet(self):
+        # Rice|Lowland Wet bands: om max 90, p max 60, k max 60 -> 210.
+        assert max_total_need("Rice", cultivation_method="Lowland Wet") == 210
+
+    def test_known_value_corn_native(self):
+        # Corn|Native bands: om max 60, p max 60, k max 60 -> 180.
+        assert max_total_need("Corn") == 180
+
+    def test_independent_of_soil_reading(self):
+        """A fixed property of the crop config, not computed from a soil
+        test -- unlike nutrient_requirements(), it takes no om/p/k args."""
+        assert max_total_need("Rice", cultivation_method="Upland") == max_total_need(
+            "Rice", cultivation_method="Upland"
+        )
+
+    def test_cultivation_method_selects_a_different_guide_row(self):
+        wet = max_total_need("Rice", cultivation_method="Lowland Wet")
+        upland = max_total_need("Rice", cultivation_method="Upland")
+        assert wet != upland
+
+    def test_variety_selects_a_different_guide_row(self):
+        native = max_total_need("Corn", variety="OPV")
+        hybrid = max_total_need("Corn", variety="Hybrid")
+        assert native != hybrid
+
+    def test_age_band_selects_a_different_guide_row(self):
+        young = max_total_need("Coconut", age_band="Below 1yr")
+        mature = max_total_need("Coconut", age_band="9yrs & up")
+        assert young != mature
+
+    def test_no_age_band_defaults_to_bearing(self):
+        assert max_total_need("Cacao") == max_total_need("Cacao", age_band="bearing")
+
+    def test_unknown_crop_raises(self):
+        with pytest.raises(KeyError):
+            max_total_need("Durian")
+
+    @pytest.mark.parametrize("crop", ["Rice", "Corn", "Cassava", "Peanut", "Tomato",
+                                       "Mango", "Cacao", "Coconut", "Banana"])
+    def test_every_crop_is_at_least_the_worst_case_nutrient_requirement(self, crop):
+        """The worst-case total (poorest possible soil: om=0, p=0, k=0) must
+        never exceed max_total_need -- if it did, a real soil reading could
+        produce a need fraction > 1."""
+        n, p, k = nutrient_requirements(crop, om=0.0, p_ppm=0.0, k_cmol_kg=0.0)
+        assert n + p + k <= max_total_need(crop)

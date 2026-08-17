@@ -289,6 +289,31 @@ GUIDE_ROWS: dict[str, GuideRow] = {
 }
 
 
+def max_total_need(
+    crop: str, variety: str | None = None, cultivation_method: str | None = None,
+    age_band: str | None = None,
+) -> float:
+    """Worst-case (poorest-possible-soil) total N+P2O5+K2O for this crop
+    config -- a fixed property of its guide row, independent of any soil
+    reading (unlike nutrient_requirements(), it takes no om/p/k args).
+    Normalizes a soil-driven total need into a 0-1 fraction of the crop's
+    own range, so crops with structurally different absolute scales (e.g.
+    Peanut's near-zero appetite vs. Tomato's) can't be compared by raw
+    kg/ha magnitude. Raises KeyError for the same inputs
+    nutrient_requirements() would. See shared/utils/ml-crop-ranking.ts
+    (selfRelativeNeedScore) in the sibling `suri` repo for the consumer."""
+    if crop not in CROPS:
+        raise KeyError(f"Unknown crop {crop!r}")
+    key = _guide_row_key(crop, variety, cultivation_method, age_band)
+    row = GUIDE_ROWS[key]
+    return round(
+        max(rate for _, rate in row.om_bands)
+        + max(rate for _, rate in row.p_bands)
+        + max(rate for _, rate in row.k_bands),
+        3,
+    )
+
+
 def target_unit_for_crop(crop: str) -> str:
     return TARGET_UNIT[crop]
 

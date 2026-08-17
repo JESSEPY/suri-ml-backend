@@ -22,7 +22,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from data.mode_of_application import application_schedule_for_crop
 from data.nutrient_recommendation_guide import (
-    CROPS, k_cmol_to_ppm, nutrient_requirements, resolve_age_band,
+    CROPS, k_cmol_to_ppm, max_total_need, nutrient_requirements, resolve_age_band,
     resolve_cultivation_method, resolve_variety, target_unit_for_crop,
 )
 from ml.agronomy import total_nitrogen_from_om
@@ -116,6 +116,7 @@ class PredictionResponse(BaseModel):
     target_n: float
     target_p2o5: float
     target_k2o: float
+    max_total_need: float
     target_unit: str
     app1_formulation: str
     app2_formulation: str
@@ -306,6 +307,22 @@ def predict(request: SoilTestRequest, background_tasks: BackgroundTasks) -> Pred
         confidence = _compute_confidence(request.crop, X)
 
     n, p2o5, k2o = round(n, 3), round(p2o5, 3), round(k2o, 3)
+    # A fixed property of the crop config, not the soil reading -- computed
+    # the same way regardless of which branch above ran. In the
+    # is_complete() branch a bad age_band would already have raised via
+    # nutrient_requirements() above; this second try/except exists for the
+    # ml-ensemble branch, which never calls nutrient_requirements() and so
+    # never gets that check for free.
+    try:
+        crop_max_need = max_total_need(
+            request.crop, variety=request.variety,
+            cultivation_method=request.cultivation_method, age_band=request.age_band,
+        )
+    except KeyError as error:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Unrecognized age_band {request.age_band!r} for crop {request.crop!r}: {error}",
+        )
     target_unit = target_unit_for_crop(request.crop)
     app1, app2 = plan_applications(n, p2o5, k2o, target_unit)
 
@@ -323,6 +340,7 @@ def predict(request: SoilTestRequest, background_tasks: BackgroundTasks) -> Pred
         target_n=n,
         target_p2o5=p2o5,
         target_k2o=k2o,
+        max_total_need=crop_max_need,
         target_unit=target_unit,
         app1_formulation=app1,
         app2_formulation=app2,
