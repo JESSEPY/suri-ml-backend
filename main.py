@@ -72,14 +72,14 @@ class SoilTestRequest(BaseModel):
     data_source: Literal["lab", "stk", "iot"]
     ph: float = Field(ge=0, le=14)
     organic_matter_pct: float | None = Field(default=None, ge=0, le=100)
-    total_nitrogen_pct: float | None = Field(default=None, ge=0)
-    phosphorus_ppm: float | None = Field(default=None, ge=0)
-    potassium_cmol_kg: float | None = Field(default=None, ge=0)
-    temp: float | None = None
+    total_nitrogen_pct: float | None = Field(default=None, ge=0, le=10)
+    phosphorus_ppm: float | None = Field(default=None, ge=0, le=500)
+    potassium_cmol_kg: float | None = Field(default=None, ge=0, le=6)
+    temp: float | None = Field(default=None, ge=-10, le=60)
     moist: float | None = Field(default=None, ge=0, le=100)
-    ec: float | None = Field(default=None, ge=0)
-    sal: float | None = Field(default=None, ge=0)
-    farm_area_sqm: float | None = Field(default=None, gt=0)
+    ec: float | None = Field(default=None, ge=0, le=20)
+    sal: float | None = Field(default=None, ge=0, le=20)
+    farm_area_sqm: float | None = Field(default=None, gt=0, le=2_000_000)
     laboratory_code: str | None = None
 
     @field_validator("crop")
