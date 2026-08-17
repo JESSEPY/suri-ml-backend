@@ -223,6 +223,38 @@ class TestValidation:
         payload = {**SAMPLE_PAYLOAD, "phosphorus_ppm": -1.0}
         assert client.post("/predict", json=payload).status_code == 422
 
+    def test_total_nitrogen_above_ten_percent_is_rejected(self, client):
+        payload = {**SAMPLE_PAYLOAD, "total_nitrogen_pct": 10.1}
+        assert client.post("/predict", json=payload).status_code == 422
+
+    def test_phosphorus_above_five_hundred_ppm_is_rejected(self, client):
+        payload = {**SAMPLE_PAYLOAD, "phosphorus_ppm": 500.1}
+        assert client.post("/predict", json=payload).status_code == 422
+
+    def test_potassium_above_six_cmol_kg_is_rejected(self, client):
+        payload = {**SAMPLE_PAYLOAD, "potassium_cmol_kg": 6.1}
+        assert client.post("/predict", json=payload).status_code == 422
+
+    def test_temp_below_negative_ten_is_rejected(self, client):
+        payload = {**SAMPLE_PAYLOAD, "temp": -10.1}
+        assert client.post("/predict", json=payload).status_code == 422
+
+    def test_temp_above_sixty_is_rejected(self, client):
+        payload = {**SAMPLE_PAYLOAD, "temp": 60.1}
+        assert client.post("/predict", json=payload).status_code == 422
+
+    def test_ec_above_twenty_is_rejected(self, client):
+        payload = {**SAMPLE_PAYLOAD, "ec": 20.1}
+        assert client.post("/predict", json=payload).status_code == 422
+
+    def test_sal_above_twenty_is_rejected(self, client):
+        payload = {**SAMPLE_PAYLOAD, "sal": 20.1}
+        assert client.post("/predict", json=payload).status_code == 422
+
+    def test_farm_area_above_two_hundred_hectares_is_rejected(self, client):
+        payload = {**SAMPLE_PAYLOAD, "farm_area_sqm": 2_000_001}
+        assert client.post("/predict", json=payload).status_code == 422
+
     def test_unknown_data_source_is_rejected(self, client):
         payload = {**SAMPLE_PAYLOAD, "data_source": "satellite"}
         assert client.post("/predict", json=payload).status_code == 422
