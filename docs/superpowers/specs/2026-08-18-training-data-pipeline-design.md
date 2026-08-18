@@ -69,18 +69,29 @@ the exact cross-check process already used and commented for the current 9 crops
 Banana, Cacao, Cassava, Coconut, Corn, Mango, Peanut, Rice, Tomato.
 
 **30 new rows to transcribe** (relevant to Region 7 farmer-facing agriculture; ornamental,
-forestry, pasture, and fiber-crop rows in the PDF are excluded as out of scope for this tool):
+forestry, pasture, and fiber-crop rows in the PDF are excluded as out of scope for this tool),
+split into two phases by transcription confidence — see
+`docs/superpowers/plans/2026-08-18-crop-coverage-expansion.md`:
+
+**Phase 1 — 21 rows, all `kg_ha`, no age axis, cleanly legible in the source scan:**
 
 - **Vegetables**: Alugbati/Kangkong; Ampalaya; Asparagus; Cabbage/Pechay/Mustard/Spinach/Broccoli;
   Cauliflower; Celery; Chayote; Cucumber/Muskmelon/Watermelon; Eggplant/Okra; Lettuce/Malunggay;
   Radish/Carrots; Squash/Upo/Patola; Strawberry
-- **Industrial/plantation**: Coffee; Papaya; Pineapple; Sugarcane
-- **Condiments**: Garlic/Chili Pepper; Ginger; Onion
+- **Condiments**: Garlic/Chili Pepper; Ginger (Improved/Local); Onion (Bulb/Spring)
 - **Rootcrops**: Gabi/Ube/Yam/Taro; Potato/Singkamas
 - **Legumes**: Beans (String)/Lima/Sitao; Peas/Tapilan/Cowpea
-- **Fruit trees**: Avocado/Guyabano/Atis/Apple/Cashew/Jackfruit/Macopa/Tambis/Balimbing;
-  Citrus/Lime/Lemon/Orange/Calamansi/Passion Fruit; Guava; Lanzones/Rambutan/Mangosteen
-- **Others**: Abaca; Dragon Fruit
+- **Industrial**: Sugarcane
+
+**Phase 2 — 9 age-banded tree/plantation rows, deferred:** Coffee; Papaya; Pineapple;
+Avocado/Guyabano/Atis/Apple/Cashew/Jackfruit/Macopa/Tambis/Balimbing;
+Citrus/Lime/Lemon/Orange/Calamansi/Passion Fruit; Guava; Lanzones/Rambutan/Mangosteen; Abaca;
+Dragon Fruit. Held back because several cells are unreadable in the available scan (Coffee's
+`6-10 yrs` K row scans non-monotonically; Guava repeats an age-band label; Dragon Fruit's row is
+mostly blank), and because they need axis work Phase 1 doesn't: Papaya's bands are in months, and
+Pineapple's `Planted`/`Ratoon` and Abaca's `Pulp`/`Cordage` are crop-cycle axes rather than ages
+or varieties. Entering a guessed fertilizer rate is not an acceptable trade for a larger crop
+count; these need a better scan or a DA-provided digital copy of the guide.
 
 **9 free species** — already covered by an existing coded crop's guide row, so recognizing them
 needs only a new crop-enum/alias entry, no new numbers to transcribe: Sorghum (shares Corn's row),
@@ -93,10 +104,19 @@ Grass/Centronella, Batao/Baguio Beans, Grapes, Grapevine, Forest/Pine trees, Cas
 Jute/Kenaf, Legume Green Manure, Pasture Grasses, Ramie/Rattan, Tangan-Tangan, Tobacco Virginia,
 Palm Date/Oil, Herbs/Bamboo/Lagundi/Sambong, Basil, Mint Herb.
 
-Net effect: recognized crop coverage goes from 9 → **39**, before any new training data is even
-uploaded. This is a one-time transcription task, done once, independent of and prior to the
-upload/retrain pipeline itself — it just means the pipeline has 39 usable crops to receive data
-for on day one instead of 9.
+Net effect: recognized crop coverage goes from 9 → **30** after Phase 1 (→ 39 once Phase 2's tree
+crops land), before any new training data is even uploaded. This is a transcription task,
+independent of and prior to the upload/retrain pipeline itself — it just means the pipeline has 30
+usable crops to receive data for on day one instead of 9.
+
+**Important consequence, handled in the plan:** a newly recognized crop is immediately usable on
+the *complete-data* path (the guide lookup is exact and needs no training), but its *model* path
+would otherwise return a confident-looking number derived from no crop-specific signal — the
+one-hot encoder is built from an explicit category list, so an untrained crop gets a column that
+was simply never active during training. The plan therefore adds a guard that refuses an
+incomplete-data request for a crop with no training rows, pointing the caller at the exact path
+instead. This is what makes "upload data for that crop, then retrain" a real prerequisite rather
+than a silent quality cliff.
 
 ## 3. Upload Template & Validation
 
