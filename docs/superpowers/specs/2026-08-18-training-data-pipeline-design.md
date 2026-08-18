@@ -83,15 +83,25 @@ split into two phases by transcription confidence — see
 - **Legumes**: Beans (String)/Lima/Sitao; Peas/Tapilan/Cowpea
 - **Industrial**: Sugarcane
 
-**Phase 2 — 9 age-banded tree/plantation rows, deferred:** Coffee; Papaya; Pineapple;
-Avocado/Guyabano/Atis/Apple/Cashew/Jackfruit/Macopa/Tambis/Balimbing;
-Citrus/Lime/Lemon/Orange/Calamansi/Passion Fruit; Guava; Lanzones/Rambutan/Mangosteen; Abaca;
-Dragon Fruit. Held back because several cells are unreadable in the available scan (Coffee's
-`6-10 yrs` K row scans non-monotonically; Guava repeats an age-band label; Dragon Fruit's row is
-mostly blank), and because they need axis work Phase 1 doesn't: Papaya's bands are in months, and
-Pineapple's `Planted`/`Ratoon` and Abaca's `Pulp`/`Cordage` are crop-cycle axes rather than ages
-or varieties. Entering a guessed fertilizer rate is not an acceptable trade for a larger crop
-count; these need a better scan or a DA-provided digital copy of the guide.
+**Phase 2 — 6 age-banded tree/plantation rows:** Pineapple; Papaya;
+Avocado/Chico/Atis/Guyabano/Apple/Cashew/Jackfruit/Macopa/Tambis/Balimbing;
+Citrus/Lime/Lemon/Orange/Calamansi/Passion Fruit; Guava; Lanzones/Rambutan/Mangosteen. These carry
+documented source-document inferences — Guava's third age row repeats the `4-6 yrs` label where
+ascending values imply `7 yrs & up`, and four Citrus cells are missing decimal points — each
+recorded in a code comment beside the value it affects. **Papaya has one unresolved cell** (its
+`1-2 yrs` K row reads non-monotonically) and is dropped from the batch unless the value can be
+confirmed, landing coverage at 35 instead of 36.
+
+**Out of scope — 3 rows blocked on source-data quality:** Coffee (`6-10 yrs` K reads
+non-monotonically), Dragon Fruit (all columns but the first are blank in the original), and Abaca
+(K's `251-300` value sits above the band below it). These are anomalies in the printed document,
+so a better scan does not fix them — they need an authoritative answer from DA RSL. Adding them
+later is pure data against the same structure; that would reach 39.
+
+A full structured transcription of the guide now exists at
+`suri/public/Nutrient Recommendation Guide.md`. It has been cross-checked against the 9
+currently-coded crops and matches band-for-band, independently confirming the four transcription
+errors already recorded in `data/nutrient_recommendation_guide.py`'s docstring.
 
 **9 free species** — already covered by an existing coded crop's guide row, so recognizing them
 needs only a new crop-enum/alias entry, no new numbers to transcribe: Sorghum (shares Corn's row),
@@ -104,8 +114,8 @@ Grass/Centronella, Batao/Baguio Beans, Grapes, Grapevine, Forest/Pine trees, Cas
 Jute/Kenaf, Legume Green Manure, Pasture Grasses, Ramie/Rattan, Tangan-Tangan, Tobacco Virginia,
 Palm Date/Oil, Herbs/Bamboo/Lagundi/Sambong, Basil, Mint Herb.
 
-Net effect: recognized crop coverage goes from 9 → **30** after Phase 1 (→ 39 once Phase 2's tree
-crops land), before any new training data is even uploaded. This is a transcription task,
+Net effect: recognized crop coverage goes from 9 → **30** after Phase 1 and → **36** after Phase 2
+(→ 39 if the three blocked rows are ever resolved), before any new training data is even uploaded. This is a transcription task,
 independent of and prior to the upload/retrain pipeline itself — it just means the pipeline has 30
 usable crops to receive data for on day one instead of 9.
 

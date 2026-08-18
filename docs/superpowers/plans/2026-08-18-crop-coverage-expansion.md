@@ -2,9 +2,11 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Raise the number of crops SURI recognizes from 9 to 30 by transcribing more rows of the official BSWM Nutrient Recommendation Guide, and make every future crop addition a pure data edit.
+**Goal:** Raise the number of crops SURI recognizes from 9 to 36 by transcribing more rows of the official BSWM Nutrient Recommendation Guide, and make every future crop addition a pure data edit.
 
-**Architecture:** The crop registry (`data/nutrient_recommendation_guide.py`) currently maintains `CROPS`, `TARGET_UNIT`, and a hardcoded `_guide_row_key()` branch per crop, all in parallel with `GUIDE_ROWS`. Tasks 1–2 invert that: `GUIDE_ROWS` becomes the single source and everything else derives from it, with a generalized sub-axis mechanism and a crop-alias map. Tasks 3–5 are then pure data additions. Tasks 6–8 sync the frontend, guard the model path for crops with no training data, and retrain.
+**Architecture:** The crop registry (`data/nutrient_recommendation_guide.py`) currently maintains `CROPS`, `TARGET_UNIT`, and a hardcoded `_guide_row_key()` branch per crop, all in parallel with `GUIDE_ROWS`. Tasks 1–2 invert that: `GUIDE_ROWS` becomes the single source and everything else derives from it, with a generalized sub-axis mechanism and a crop-alias map. Tasks 3–6 are then pure data additions — including the age-banded tree crops, which need no new structural code because Task 1's generalization already covers their axes. Tasks 7–9 guard the model path for crops with no training data, sync the frontend, and retrain.
+
+**Two phases, one plan.** Phase 1 (Tasks 3–5) adds 21 field/vegetable crops whose values are verified by two independent transcriptions. Phase 2 (Task 6) adds 6 tree and plantation crops that carry documented source-document inferences — read that task's anomaly table before starting it. Three further crops (Coffee, Dragon Fruit, Abaca) remain out of scope; see "Deliberately Deferred".
 
 **Tech Stack:** Python 3.12, scikit-learn/XGBoost, pytest; TypeScript/Next.js for the frontend crop list.
 
@@ -20,7 +22,8 @@
   - `p_bands` — 6 Olsen columns `0-6.0 / 6.1-10.0 / 10.1-15.0 / 15.1-20.0 / 20.1-30.0 / >30.1`. Collapse to 5 entries **only when the 5th and 6th columns hold the same rate**: `((6.0,a),(10.0,b),(15.0,c),(20.0,d),(inf,e))`; otherwise keep all six with `(30.0, …)` before the terminal band.
   - `k_bands` — 5 values for columns `0-35 / 36-55 / 56-250 / 251-300 / >301` → `((35.0,a),(55.0,b),(250.0,c),(300.0,d),(inf,e))`
 - **P values use the Olsen column labels**, per the existing `P_METHOD = "olsen"` constant.
-- **Field crops are `kg_ha`.** Every crop added by this plan is a field/vegetable/root/legume crop measured per hectare. No `kg_tree` crop is added here (see "Deliberately Deferred" at the end).
+- **Units follow the row's scale.** Phase 1's crops are all `kg_ha`. Phase 2 adds Pineapple (`kg_ha`) and four `kg_tree` fruit-tree groups. Note that `kg_ha` vs `kg_tree` is an **inference**, not printed in the guide — it states units in only two places (Roses `g/plant`, Banana `576 trees/ha`). Whole-number rows are read as kg/ha and decimal rows as kg/tree, which is the convention the existing 9 crops already follow.
+- **Record every source-document inference in a code comment** next to the value it affects. Phase 2 has several (a duplicated age label, four missing decimal points); a future reader must be able to tell a transcribed value from a reconstructed one without re-deriving it.
 - **`handle_unknown="error"` stays.** No crop may silently produce an all-zeros feature vector.
 - Commit after every task. Run `python -m pytest` from `suri-ml-backend/` before each commit.
 
@@ -922,7 +925,396 @@ git commit -m "feat: register nine species already covered by existing guide row
 
 ---
 
-### Task 6: Refuse model-path predictions for crops with no training data
+### Task 6: Transcribe the Phase 2 tree and plantation crops
+
+**No structural work is needed.** Task 1's generalized `_guide_row_key()` already routes any crop in `BEARING_AGE_BAND` through its age axis and any crop in `DEFAULT_VARIETY_ROW` through its variety axis, `AGE_BANDS` already derives itself from `GUIDE_ROWS`, and `TARGET_UNIT` already derives from each row's `unit`. This task is therefore a pure data addition — which is exactly what Tasks 1–2 were built to make possible.
+
+**Files:**
+- Modify: `data/nutrient_recommendation_guide.py`
+- Test: `tests/test_nutrient_recommendation_guide.py`
+
+**Interfaces:**
+- Produces 6 new canonical crops across 24 guide rows: Pineapple (`kg_ha`, variety axis) and Papaya, Avocado, Citrus, Guava, Lanzones (all `kg_tree`, age axis), plus 16 aliases.
+
+#### Source anomalies that must be resolved before this task ships
+
+Three cells cannot be read straight off the guide. Two are flagged in the `.md`'s own transcription notes; **one was found during this plan's cross-check and is not flagged anywhere else.** Each is encoded below with an explicit inference, and each needs a sign-off decision — do not let them pass silently.
+
+| Crop / row | What the source prints | What this task encodes | Basis |
+|---|---|---|---|
+| **Guava**, 3rd age row | Label repeats `4-6 yrs` | `7 yrs & up` | Its values (`P .30/.20/.15/.10`, `K .60/.45/.30`) are identical to the Avocado group's `7 yrs & up` row, and ascend from Guava's own `4-6 yrs` row. Strong corroboration. |
+| **Citrus**, `5 yrs` / `6-10 yrs` / `11-15 yrs` | `K 0-35` reads `.03`; `K 36-55` reads `15`; `K 0-35` reads `45`; `P 0-6.0` reads `40` | `.30`, `.15`, `.45`, `.40` | Missing decimal points. Restoring them makes each row monotonic and continues the exact progression of the surrounding age bands (`4 yrs` K `.15/.09/.03` → `5 yrs` `.30/.15/.06` → `6-10 yrs` `.45/.30/.09`). The `.md`'s note 3 flags three of these; **the `5 yrs` `K 0-35` cell (`.03` → `.30`) is a fourth, found here.** |
+| **Papaya**, `1-2 yrs.` | `K` reads `.27 / .08 / .135 / .054` | **UNRESOLVED — see below** | Non-monotonic: `.08` sits below the `.135` that follows it. Not flagged in the `.md`'s notes; found during this cross-check. |
+
+**Papaya is the one that cannot be inferred safely.** Papaya's other two age rows both follow the ratio pattern `1 : 0.7 : 0.5 : 0.2` across the K classes. Applying it to `1-2 yrs` gives `.27 / .189 / .135 / .054`, so the printed `.08` is most likely `.18` or `.19` — but "most likely" is doing real work there, and this is a potassium rate a farmer applies to a bearing papaya. **Do not guess it.**
+
+- [ ] **Step 0: Resolve the Papaya K cell before writing any code**
+
+Confirm the `1-2 yrs.` `K 36-55` value against a clean copy of the guide or with DA RSL. Then take **one** of these paths:
+
+- **Confirmed value obtained** → use it in Step 3 and add the `Papaya` entries as written.
+- **Cannot be confirmed in time** → omit Papaya entirely from this task (drop its `GUIDE_ROWS` entries, its `BEARING_AGE_BAND` entry, and its test cases). The other five crops are independent and ship fine without it; coverage lands at 35 canonical crops instead of 36.
+
+Do not proceed to Step 1 until this is decided. Record the decision in the commit message.
+
+- [ ] **Step 1: Write the failing tests**
+
+Append to `tests/test_nutrient_recommendation_guide.py`:
+
+```python
+class TestPhase2TreeAndPlantationCrops:
+    """Age-banded tree crops plus Pineapple's Planted/Ratoon cycle axis.
+    Every expectation reads the lowest band of each class (poorest soil), so
+    a transposed column would fail loudly."""
+
+    @pytest.mark.parametrize("crop,expected", [
+        ("Pineapple", (300, 80, 180)),
+        ("Avocado", (0.3, 0.3, 0.6)),
+        ("Citrus", (0.5, 0.5, 0.75)),
+        ("Guava", (0.05, 0.3, 0.6)),
+        ("Lanzones", (0.4, 0.8, 1.2)),
+    ])
+    def test_poorest_soil_at_the_default_stage(self, crop, expected):
+        from data.nutrient_recommendation_guide import K_CMOL_TO_PPM, nutrient_requirements
+
+        assert nutrient_requirements(crop, 1.0, 3.0, 20.0 / K_CMOL_TO_PPM) == expected
+
+    def test_pineapple_ratoon_is_a_separate_row(self):
+        from data.nutrient_recommendation_guide import K_CMOL_TO_PPM, nutrient_requirements
+
+        k = 20.0 / K_CMOL_TO_PPM
+        assert nutrient_requirements("Pineapple", 1.0, 3.0, k, variety="Ratoon") == (150, 40, 120)
+
+    def test_pineapple_defaults_to_the_planted_row(self):
+        from data.nutrient_recommendation_guide import K_CMOL_TO_PPM, nutrient_requirements
+
+        k = 20.0 / K_CMOL_TO_PPM
+        assert nutrient_requirements("Pineapple", 1.0, 3.0, k) == \
+               nutrient_requirements("Pineapple", 1.0, 3.0, k, variety="Planted")
+
+    def test_pineapple_is_the_only_per_hectare_crop_added_here(self):
+        from data.nutrient_recommendation_guide import target_unit_for_crop
+
+        assert target_unit_for_crop("Pineapple") == "kg_ha"
+        for crop in ["Avocado", "Citrus", "Guava", "Lanzones"]:
+            assert target_unit_for_crop(crop) == "kg_tree"
+
+    @pytest.mark.parametrize("crop,age_band,expected", [
+        ("Avocado", "NT", (0.01, 0.01, 0.015)),
+        ("Avocado", "1-3 yrs", (0.1, 0.1, 0.3)),
+        ("Lanzones", "NT", (0.01, 0.02, 0.08)),
+        ("Guava", "1-3 yrs", (0.02, 0.1, 0.3)),
+        ("Citrus", "NT", (0.01, 0.01, 0.015)),
+    ])
+    def test_explicit_age_bands(self, crop, age_band, expected):
+        from data.nutrient_recommendation_guide import K_CMOL_TO_PPM, nutrient_requirements
+
+        assert nutrient_requirements(
+            crop, 1.0, 3.0, 20.0 / K_CMOL_TO_PPM, age_band=age_band
+        ) == expected
+
+    def test_citrus_five_year_row_uses_the_restored_decimals(self):
+        """The source prints K 0-35 as '.03' and K 36-55 as '15'; both are
+        missing decimal points. Restoring them keeps the row monotonic and
+        continues the 4yrs -> 6-10yrs progression."""
+        from data.nutrient_recommendation_guide import K_CMOL_TO_PPM, nutrient_requirements
+
+        assert nutrient_requirements(
+            "Citrus", 1.0, 3.0, 20.0 / K_CMOL_TO_PPM, age_band="5 yrs"
+        ) == (0.15, 0.2, 0.3)
+        assert nutrient_requirements(
+            "Citrus", 1.0, 3.0, 45.0 / K_CMOL_TO_PPM, age_band="5 yrs"
+        ) == (0.15, 0.2, 0.15)
+
+    def test_guava_third_row_is_registered_as_seven_years_and_up(self):
+        from data.nutrient_recommendation_guide import GUIDE_ROWS
+
+        assert "Guava|7 yrs & up" in GUIDE_ROWS
+        assert "Guava|4-6 yrs" in GUIDE_ROWS
+
+    @pytest.mark.parametrize("alias,canonical", [
+        ("Guyabano", "Avocado"), ("Atis", "Avocado"), ("Chico", "Avocado"),
+        ("Jackfruit", "Avocado"), ("Cashew", "Avocado"),
+        ("Calamansi", "Citrus"), ("Lime", "Citrus"), ("Orange", "Citrus"),
+        ("Passion Fruit", "Citrus"),
+        ("Rambutan", "Lanzones"), ("Mangosteen", "Lanzones"),
+    ])
+    def test_co_listed_species_alias_to_their_row(self, alias, canonical):
+        from data.nutrient_recommendation_guide import resolve_crop
+
+        assert resolve_crop(alias) == canonical
+
+    def test_every_age_banded_crop_has_a_bearing_default(self):
+        """resolve_age_band() falls back to BEARING_AGE_BAND when the caller
+        omits age_band; a crop with age rows but no entry there would key to
+        'None' and raise KeyError on every request."""
+        from data.nutrient_recommendation_guide import BEARING_AGE_BAND, GUIDE_ROWS
+
+        for crop in ["Papaya", "Avocado", "Citrus", "Guava", "Lanzones"]:
+            if not any(key.startswith(f"{crop}|") for key in GUIDE_ROWS):
+                continue  # Papaya may have been omitted -- see Step 0
+            assert crop in BEARING_AGE_BAND
+            assert f"{crop}|{BEARING_AGE_BAND[crop]}" in GUIDE_ROWS
+```
+
+If Papaya was omitted at Step 0, also drop the Papaya case from `test_every_age_banded_crop_has_a_bearing_default`'s list (the `continue` guard already handles it, so no edit is strictly required).
+
+- [ ] **Step 2: Run the tests to verify they fail**
+
+Run: `python -m pytest tests/test_nutrient_recommendation_guide.py::TestPhase2TreeAndPlantationCrops -v`
+Expected: FAIL with `KeyError: "Unknown crop 'Pineapple'"`
+
+- [ ] **Step 3: Add the rows**
+
+Add to `GUIDE_ROWS`:
+
+```python
+    # --- PLANTATION / FRUIT TREES (guide pages 2-3) ---------------------
+    # Pineapple's Planted/Ratoon is a crop-cycle axis, carried on the
+    # variety field (same mechanism as Ginger's Improved/Local).
+    "Pineapple|Planted": GuideRow(
+        "kg_ha",
+        om_bands=((2.0, 300), (3.5, 200), (4.5, 100), (5.5, 80), (float("inf"), 0)),
+        p_bands=((6.0, 80), (10.0, 60), (15.0, 40), (20.0, 20), (float("inf"), 0)),
+        k_bands=((35.0, 180), (55.0, 120), (250.0, 60), (300.0, 30), (float("inf"), 0)),
+    ),
+    "Pineapple|Ratoon": GuideRow(
+        "kg_ha",
+        om_bands=((2.0, 150), (3.5, 120), (4.5, 80), (5.5, 50), (float("inf"), 0)),
+        p_bands=((6.0, 40), (10.0, 30), (15.0, 20), (20.0, 10), (float("inf"), 0)),
+        k_bands=((35.0, 120), (55.0, 75), (250.0, 45), (300.0, 30), (float("inf"), 0)),
+    ),
+    # Papaya -- OMIT THIS BLOCK ENTIRELY if Step 0 could not confirm the
+    # 1-2 yrs K 36-55 value. The placeholder below is deliberately left as
+    # the source's own printed .08 so that shipping an unconfirmed guess is
+    # impossible without someone editing this line on purpose.
+    "Papaya|2-6 mos": GuideRow(
+        "kg_tree",
+        om_bands=((2.0, 0.024), (3.5, 0.016), (4.5, 0.012), (5.5, 0.006), (float("inf"), 0)),
+        p_bands=((6.0, 0.048), (10.0, 0.032), (15.0, 0.024), (20.0, 0.012), (float("inf"), 0)),
+        k_bands=((35.0, 0.03), (55.0, 0.021), (250.0, 0.015), (300.0, 0.006), (float("inf"), 0)),
+    ),
+    "Papaya|7-12 mos": GuideRow(
+        "kg_tree",
+        om_bands=((2.0, 0.08), (3.5, 0.05), (4.5, 0.04), (5.5, 0.02), (float("inf"), 0)),
+        p_bands=((6.0, 0.16), (10.0, 0.10), (15.0, 0.075), (20.0, 0.035), (float("inf"), 0)),
+        k_bands=((35.0, 0.105), (55.0, 0.09), (250.0, 0.06), (300.0, 0.024), (float("inf"), 0)),
+    ),
+    "Papaya|1-2 yrs": GuideRow(
+        "kg_tree",
+        om_bands=((2.0, 0.20), (3.5, 0.15), (4.5, 0.10), (5.5, 0.05), (float("inf"), 0)),
+        p_bands=((6.0, 0.40), (10.0, 0.25), (15.0, 0.18), (20.0, 0.09), (float("inf"), 0)),
+        # <-- Step 0's confirmed value replaces 0.08 here.
+        k_bands=((35.0, 0.27), (55.0, 0.08), (250.0, 0.135), (300.0, 0.054), (float("inf"), 0)),
+    ),
+    "Avocado|NT": GuideRow(
+        "kg_tree",
+        om_bands=((2.0, 0.01), (3.5, 0.01), (4.5, 0.01), (5.5, 0), (float("inf"), 0)),
+        p_bands=((6.0, 0.01), (10.0, 0.01), (15.0, 0.01), (20.0, 0.01), (float("inf"), 0)),
+        k_bands=((35.0, 0.015), (55.0, 0.015), (250.0, 0.015), (300.0, 0), (float("inf"), 0)),
+    ),
+    "Avocado|1-3 yrs": GuideRow(
+        "kg_tree",
+        om_bands=((2.0, 0.10), (3.5, 0.05), (4.5, 0.03), (5.5, 0), (float("inf"), 0)),
+        p_bands=((6.0, 0.10), (10.0, 0.05), (15.0, 0.03), (20.0, 0.01), (float("inf"), 0)),
+        k_bands=((35.0, 0.30), (55.0, 0.15), (250.0, 0.05), (300.0, 0), (float("inf"), 0)),
+    ),
+    "Avocado|4-6 yrs": GuideRow(
+        "kg_tree",
+        om_bands=((2.0, 0.20), (3.5, 0.10), (4.5, 0.06), (5.5, 0), (float("inf"), 0)),
+        p_bands=((6.0, 0.20), (10.0, 0.10), (15.0, 0.08), (20.0, 0.05), (float("inf"), 0)),
+        k_bands=((35.0, 0.45), (55.0, 0.30), (250.0, 0.15), (300.0, 0), (float("inf"), 0)),
+    ),
+    "Avocado|7 yrs & up": GuideRow(
+        "kg_tree",
+        om_bands=((2.0, 0.30), (3.5, 0.20), (4.5, 0.10), (5.5, 0), (float("inf"), 0)),
+        p_bands=((6.0, 0.30), (10.0, 0.20), (15.0, 0.15), (20.0, 0.10), (float("inf"), 0)),
+        k_bands=((35.0, 0.60), (55.0, 0.45), (250.0, 0.30), (300.0, 0), (float("inf"), 0)),
+    ),
+    "Citrus|NT": GuideRow(
+        "kg_tree",
+        om_bands=((2.0, 0.01), (3.5, 0.01), (4.5, 0.005), (5.5, 0), (float("inf"), 0)),
+        p_bands=((6.0, 0.01), (10.0, 0.01), (15.0, 0.008), (20.0, 0.005), (float("inf"), 0)),
+        k_bands=((35.0, 0.015), (55.0, 0.009), (250.0, 0.003), (300.0, 0), (float("inf"), 0)),
+    ),
+    "Citrus|1 yr": GuideRow(
+        "kg_tree",
+        om_bands=((2.0, 0.04), (3.5, 0.02), (4.5, 0.008), (5.5, 0), (float("inf"), 0)),
+        p_bands=((6.0, 0.04), (10.0, 0.02), (15.0, 0.01), (20.0, 0.008), (float("inf"), 0)),
+        k_bands=((35.0, 0.03), (55.0, 0.015), (250.0, 0.015), (300.0, 0), (float("inf"), 0)),
+    ),
+    "Citrus|2 yrs": GuideRow(
+        "kg_tree",
+        om_bands=((2.0, 0.05), (3.5, 0.03), (4.5, 0.01), (5.5, 0), (float("inf"), 0)),
+        p_bands=((6.0, 0.05), (10.0, 0.03), (15.0, 0.015), (20.0, 0.010), (float("inf"), 0)),
+        k_bands=((35.0, 0.06), (55.0, 0.03), (250.0, 0.009), (300.0, 0), (float("inf"), 0)),
+    ),
+    "Citrus|3 yrs": GuideRow(
+        "kg_tree",
+        om_bands=((2.0, 0.075), (3.5, 0.04), (4.5, 0.015), (5.5, 0), (float("inf"), 0)),
+        p_bands=((6.0, 0.075), (10.0, 0.04), (15.0, 0.02), (20.0, 0.015), (float("inf"), 0)),
+        k_bands=((35.0, 0.09), (55.0, 0.06), (250.0, 0.015), (300.0, 0), (float("inf"), 0)),
+    ),
+    "Citrus|4 yrs": GuideRow(
+        "kg_tree",
+        om_bands=((2.0, 0.10), (3.5, 0.06), (4.5, 0.02), (5.5, 0), (float("inf"), 0)),
+        p_bands=((6.0, 0.10), (10.0, 0.05), (15.0, 0.03), (20.0, 0.02), (float("inf"), 0)),
+        k_bands=((35.0, 0.15), (55.0, 0.09), (250.0, 0.03), (300.0, 0), (float("inf"), 0)),
+    ),
+    "Citrus|5 yrs": GuideRow(
+        "kg_tree",
+        om_bands=((2.0, 0.15), (3.5, 0.10), (4.5, 0.03), (5.5, 0), (float("inf"), 0)),
+        p_bands=((6.0, 0.20), (10.0, 0.10), (15.0, 0.05), (20.0, 0.03), (float("inf"), 0)),
+        # Decimal points RESTORED: the source prints '.03' and '15' for the
+        # first two K classes. Both are missing a decimal -- .30/.15/.06 keeps
+        # the row monotonic and continues the 4yrs (.15/.09/.03) to 6-10yrs
+        # (.45/.30/.09) progression.
+        k_bands=((35.0, 0.30), (55.0, 0.15), (250.0, 0.06), (300.0, 0), (float("inf"), 0)),
+    ),
+    "Citrus|6-10 yrs": GuideRow(
+        "kg_tree",
+        om_bands=((2.0, 0.30), (3.5, 0.20), (4.5, 0.05), (5.5, 0), (float("inf"), 0)),
+        p_bands=((6.0, 0.30), (10.0, 0.20), (15.0, 0.10), (20.0, 0.05), (float("inf"), 0)),
+        # Decimal point RESTORED: source prints '45' for K 0-35.
+        k_bands=((35.0, 0.45), (55.0, 0.30), (250.0, 0.09), (300.0, 0), (float("inf"), 0)),
+    ),
+    "Citrus|11-15 yrs": GuideRow(
+        "kg_tree",
+        om_bands=((2.0, 0.40), (3.5, 0.30), (4.5, 0.10), (5.5, 0), (float("inf"), 0)),
+        # Decimal point RESTORED: source prints '40' for P 0-6.0.
+        p_bands=((6.0, 0.40), (10.0, 0.30), (15.0, 0.20), (20.0, 0.10), (float("inf"), 0)),
+        k_bands=((35.0, 0.60), (55.0, 0.45), (250.0, 0.15), (300.0, 0), (float("inf"), 0)),
+    ),
+    "Citrus|15 yrs & up": GuideRow(
+        "kg_tree",
+        om_bands=((2.0, 0.50), (3.5, 0.40), (4.5, 0.20), (5.5, 0), (float("inf"), 0)),
+        p_bands=((6.0, 0.50), (10.0, 0.40), (15.0, 0.30), (20.0, 0.20), (float("inf"), 0)),
+        k_bands=((35.0, 0.75), (55.0, 0.60), (250.0, 0.30), (300.0, 0), (float("inf"), 0)),
+    ),
+    "Guava|1-3 yrs": GuideRow(
+        "kg_tree",
+        om_bands=((2.0, 0.02), (3.5, 0.01), (4.5, 0.005), (5.5, 0), (float("inf"), 0)),
+        p_bands=((6.0, 0.10), (10.0, 0.05), (15.0, 0.03), (20.0, 0.01), (float("inf"), 0)),
+        k_bands=((35.0, 0.30), (55.0, 0.15), (250.0, 0.05), (300.0, 0), (float("inf"), 0)),
+    ),
+    "Guava|4-6 yrs": GuideRow(
+        "kg_tree",
+        om_bands=((2.0, 0.04), (3.5, 0.02), (4.5, 0.01), (5.5, 0), (float("inf"), 0)),
+        p_bands=((6.0, 0.20), (10.0, 0.10), (15.0, 0.08), (20.0, 0.05), (float("inf"), 0)),
+        k_bands=((35.0, 0.45), (55.0, 0.30), (250.0, 0.15), (300.0, 0), (float("inf"), 0)),
+    ),
+    # Label INFERRED: the guide prints '4-6 yrs' twice. These values ascend
+    # from the row above and match the Avocado group's '7 yrs & up' row
+    # exactly, so this is that band.
+    "Guava|7 yrs & up": GuideRow(
+        "kg_tree",
+        om_bands=((2.0, 0.05), (3.5, 0.03), (4.5, 0.02), (5.5, 0), (float("inf"), 0)),
+        p_bands=((6.0, 0.30), (10.0, 0.20), (15.0, 0.15), (20.0, 0.10), (float("inf"), 0)),
+        k_bands=((35.0, 0.60), (55.0, 0.45), (250.0, 0.30), (300.0, 0), (float("inf"), 0)),
+    ),
+    "Lanzones|NT": GuideRow(
+        "kg_tree",
+        om_bands=((2.0, 0.01), (3.5, 0.01), (4.5, 0.01), (5.5, 0), (float("inf"), 0)),
+        p_bands=((6.0, 0.02), (10.0, 0.02), (15.0, 0.02), (20.0, 0.01), (float("inf"), 0)),
+        k_bands=((35.0, 0.08), (55.0, 0.05), (250.0, 0.03), (300.0, 0), (float("inf"), 0)),
+    ),
+    "Lanzones|1-3 yrs": GuideRow(
+        "kg_tree",
+        om_bands=((2.0, 0.10), (3.5, 0.05), (4.5, 0.03), (5.5, 0), (float("inf"), 0)),
+        p_bands=((6.0, 0.20), (10.0, 0.10), (15.0, 0.05), (20.0, 0.03), (float("inf"), 0)),
+        k_bands=((35.0, 0.30), (55.0, 0.15), (250.0, 0.09), (300.0, 0), (float("inf"), 0)),
+    ),
+    "Lanzones|4-6 yrs": GuideRow(
+        "kg_tree",
+        om_bands=((2.0, 0.20), (3.5, 0.10), (4.5, 0.05), (5.5, 0), (float("inf"), 0)),
+        p_bands=((6.0, 0.40), (10.0, 0.30), (15.0, 0.20), (20.0, 0.10), (float("inf"), 0)),
+        k_bands=((35.0, 0.90), (55.0, 0.60), (250.0, 0.30), (300.0, 0), (float("inf"), 0)),
+    ),
+    "Lanzones|7 yrs & up": GuideRow(
+        "kg_tree",
+        om_bands=((2.0, 0.40), (3.5, 0.30), (4.5, 0.20), (5.5, 0), (float("inf"), 0)),
+        p_bands=((6.0, 0.80), (10.0, 0.60), (15.0, 0.40), (20.0, 0.20), (float("inf"), 0)),
+        k_bands=((35.0, 1.2), (55.0, 0.90), (250.0, 0.60), (300.0, 0), (float("inf"), 0)),
+    ),
+```
+
+Extend `BEARING_AGE_BAND` — the mature/fruit-bearing row each crop falls back to when the caller omits `age_band`:
+
+```python
+BEARING_AGE_BAND: dict[str, str] = {
+    "Coconut": "9yrs & up", "Cacao": "Over 7yrs", "Mango": "10yrs & up",
+    "Papaya": "1-2 yrs", "Avocado": "7 yrs & up", "Citrus": "15 yrs & up",
+    "Guava": "7 yrs & up", "Lanzones": "7 yrs & up",
+}
+```
+
+Register Pineapple's cycle axis:
+
+```python
+VARIETIES_BY_CROP: dict[str, tuple[str, ...]] = {
+    "Rice": ("Hybrid", "Inbred"),
+    "Corn": ("OPV", "Hybrid"),
+    "Ginger": ("Improved", "Local"),
+    "Onion": ("Bulb", "Spring"),
+    "Pineapple": ("Planted", "Ratoon"),
+}
+```
+
+```python
+DEFAULT_VARIETY_ROW: dict[str, str] = {
+    "Corn": "Native",
+    "Ginger": "Improved",
+    "Onion": "Bulb",
+    "Pineapple": "Planted",
+}
+```
+
+And extend `CROP_ALIASES` with the co-listed species:
+
+```python
+    # Fruit-tree groups: every species below shares its canonical crop's row.
+    "Chico": "Avocado",
+    "Atis": "Avocado",
+    "Guyabano": "Avocado",
+    "Apple": "Avocado",
+    "Cashew": "Avocado",
+    "Jackfruit": "Avocado",
+    "Macopa": "Avocado",
+    "Tambis": "Avocado",
+    "Balimbing": "Avocado",
+    "Lime": "Citrus",
+    "Lemon": "Citrus",
+    "Orange": "Citrus",
+    "Calamansi": "Citrus",
+    "Passion Fruit": "Citrus",
+    "Rambutan": "Lanzones",
+    "Mangosteen": "Lanzones",
+```
+
+> The guide prints `Calamnsi`; that is a typo in the source. Register the correct spelling `Calamansi` — a farmer-facing dropdown should not reproduce it.
+
+- [ ] **Step 4: Run the tests to verify they pass**
+
+Run: `python -m pytest tests/test_nutrient_recommendation_guide.py -v`
+Expected: PASS
+
+- [ ] **Step 5: Run the full suite and commit**
+
+Run: `python -m pytest`
+Expected: PASS
+
+```bash
+git add data/nutrient_recommendation_guide.py tests/test_nutrient_recommendation_guide.py
+git commit -m "feat: add Pineapple and four fruit-tree guide row groups
+
+Records two source-document inferences: Guava's duplicated age label read
+as '7 yrs & up', and four missing decimal points restored in the Citrus
+rows. Papaya: <state the Step 0 decision here>."
+```
+
+---
+
+### Task 7: Refuse model-path predictions for crops with no training data
 
 **The problem this prevents:** `OneHotEncoder` is built with an explicit `categories=` list, so after a retrain every crop in `CANONICAL_CROPS` has its own column — including the 21 crops with zero training rows. Their column is never active during training, so the tree ensemble simply never splits on it and the model returns something near the global mean. That is a **confident-looking number computed from no crop-specific information**, which is precisely the failure mode `handle_unknown="error"` was chosen to prevent for unknown crops. The complete-data path is unaffected (it reads the guide table directly and is exact), so this guard applies only to the model path.
 
@@ -1032,7 +1424,7 @@ git commit -m "feat: refuse model-path predictions for crops with no training da
 
 ---
 
-### Task 7: Sync suri's crop lists
+### Task 8: Sync suri's crop lists
 
 **Why:** `suri` keeps its own two crop literals — `shared/types/ml-fertilizer.ts`'s `ML_CROPS` and `shared/constants/crops.ts`'s `CROP_OPTIONS` — and `scripts/check-crop-list-sync.mjs` fails if they disagree. Neither knows about the backend's expansion, so without this task the new crops are unselectable in every flow.
 
@@ -1060,7 +1452,14 @@ export const VARIETIES_BY_CROP: Partial<Record<MLCrop, readonly string[]>> = {
   Corn: ["OPV", "Hybrid"],
   Ginger: ["Improved", "Local"],
   Onion: ["Bulb", "Spring"],
+  Pineapple: ["Planted", "Ratoon"],
 };
+```
+
+If that file also carries an age-band list mirroring the backend's, extend it with the Phase 2 bands (`Papaya`: `2-6 mos` / `7-12 mos` / `1-2 yrs`; `Avocado`, `Guava`, `Lanzones`: `NT` / `1-3 yrs` / `4-6 yrs` / `7 yrs & up`; `Citrus`: `NT` / `1 yr` / `2 yrs` / `3 yrs` / `4 yrs` / `5 yrs` / `6-10 yrs` / `11-15 yrs` / `15 yrs & up`). Confirm against the backend with:
+
+```bash
+python -c "from ml.preprocessing import AGE_BANDS; print(AGE_BANDS)"
 ```
 
 - [ ] **Step 3: Update `CROP_OPTIONS`**
@@ -1119,7 +1518,31 @@ In `suri/shared/constants/crops.ts`, add one `{ value, label }` entry per new cr
   { value: "Caimito", label: "Caimito" },
   { value: "Durian", label: "Durian" },
   { value: "Marang", label: "Marang" },
+  { value: "Pineapple", label: "Pineapple (Pinya)" },
+  { value: "Papaya", label: "Papaya" },
+  { value: "Avocado", label: "Avocado" },
+  { value: "Chico", label: "Chico" },
+  { value: "Atis", label: "Atis" },
+  { value: "Guyabano", label: "Guyabano" },
+  { value: "Apple", label: "Apple" },
+  { value: "Cashew", label: "Cashew (Kasoy)" },
+  { value: "Jackfruit", label: "Jackfruit (Langka)" },
+  { value: "Macopa", label: "Macopa" },
+  { value: "Tambis", label: "Tambis" },
+  { value: "Balimbing", label: "Balimbing" },
+  { value: "Citrus", label: "Citrus" },
+  { value: "Lime", label: "Lime (Dayap)" },
+  { value: "Lemon", label: "Lemon" },
+  { value: "Orange", label: "Orange" },
+  { value: "Calamansi", label: "Calamansi" },
+  { value: "Passion Fruit", label: "Passion Fruit" },
+  { value: "Guava", label: "Guava (Bayabas)" },
+  { value: "Lanzones", label: "Lanzones" },
+  { value: "Rambutan", label: "Rambutan" },
+  { value: "Mangosteen", label: "Mangosteen" },
 ```
+
+Omit the `Papaya` entry if it was dropped at Task 6 Step 0. The sync check in Step 4 will catch it either way.
 
 - [ ] **Step 4: Run the sync guard**
 
@@ -1146,9 +1569,9 @@ git commit -m "feat: expand suri's crop lists to match the backend"
 
 ---
 
-### Task 8: Retrain and promote
+### Task 9: Retrain and promote
 
-**Why this is required, not optional:** the preprocessor's one-hot vocabulary is captured inside the pickled artifact. The currently-pinned artifact (`ml/artifacts/2026-08-06-055755/`) encodes 9 crops and 4 varieties. After Tasks 1–5 the code offers 30 crops and 6 varieties, so **the live artifact and the running code now disagree** — a request for any new crop reaches `transform()` and raises `ValueError`, surfacing as a 422. Retraining rebuilds the preprocessor against the new vocabulary.
+**Why this is required, not optional:** the preprocessor's one-hot vocabulary is captured inside the pickled artifact. The currently-pinned artifact (`ml/artifacts/2026-08-06-055755/`) encodes 9 crops and 4 varieties. After Tasks 1–6 the code offers 36 crops and 10 varieties, so **the live artifact and the running code now disagree** — a request for any new crop reaches `transform()` and raises `ValueError`, surfacing as a 422. Retraining rebuilds the preprocessor against the new vocabulary.
 
 **Files:**
 - Modify: `.gitignore` (re-pin the artifact)
@@ -1187,9 +1610,11 @@ print('crops:', len(enc.categories[0]), 'varieties:', len(enc.categories[1]))
 " <version>
 ```
 
-Expected: `crops: 30 varieties: 6`.
+Expected: `crops: 36 varieties: 10` — or `crops: 35` if Papaya was omitted at Task 6 Step 0.
 
-> The by-crop metrics will still cover only the 9 crops that have training rows — that is expected and is exactly what Task 6's guard keys off.
+> Counts explained: 9 original + 21 Phase 1 + 6 Phase 2 = 36 canonical crops (aliases do **not** get their own column — they resolve to a canonical name before featurizing, which is the whole point of Task 2). Varieties are `None` plus the union of `VARIETIES_BY_CROP`: Hybrid, Inbred, OPV, Improved, Local, Bulb, Spring, Planted, Ratoon = 10.
+
+> The by-crop metrics will still cover only the 9 crops that have training rows — that is expected and is exactly what Task 7's guard keys off.
 
 - [ ] **Step 3: Run the full suite against the new artifact**
 
@@ -1233,11 +1658,28 @@ curl -s -X POST http://localhost:8001/predict -H "Content-Type: application/json
 ```
 Expected: HTTP 200, identical targets to the same request with `"crop":"Corn"`.
 
+```bash
+# A Phase 2 tree crop: per-tree unit, and the bearing age band by default
+curl -s -X POST http://localhost:8001/predict -H "Content-Type: application/json" \
+  -d '{"crop":"Lanzones","data_source":"lab","ph":6.4,"organic_matter_pct":1.5,
+       "phosphorus_ppm":4.0,"potassium_cmol_kg":0.05}' | python -m json.tool
+```
+Expected: HTTP 200, `"target_unit": "kg_tree"`, `target_n: 0.4`, `target_p2o5: 0.8`, `target_k2o: 1.2`, and `farm_totals: null` (per-tree rates need a tree count, which this API doesn't collect).
+
+```bash
+# Pineapple's crop-cycle axis rides on `variety`
+curl -s -X POST http://localhost:8001/predict -H "Content-Type: application/json" \
+  -d '{"crop":"Pineapple","variety":"Ratoon","data_source":"lab","ph":6.4,
+       "organic_matter_pct":1.5,"phosphorus_ppm":4.0,"potassium_cmol_kg":0.05}' \
+  | python -m json.tool
+```
+Expected: HTTP 200, `target_n: 150` (the Ratoon row); omitting `variety` gives `300` from the Planted row.
+
 - [ ] **Step 6: Commit and promote**
 
 ```bash
 git add .gitignore "ml/artifacts/<new-version>"
-git commit -m "feat: retrain against the expanded 30-crop vocabulary"
+git commit -m "feat: retrain against the expanded 36-crop vocabulary"
 ```
 
 If Plan A is already deployed, promote through the admin UI's Model Training → Version History tab (this doubles as a live rehearsal of the promotion flow). Otherwise push to `main` and let the existing Actions deploy carry it.
@@ -1246,20 +1688,14 @@ If Plan A is already deployed, promote through the admin UI's Model Training →
 
 ## Deliberately Deferred
 
-**The 9 age-banded tree/plantation crops are not in this plan**, but the full transcription in `suri/public/Nutrient Recommendation Guide.md` changes the picture: most are now blocked on *structure*, not on legibility. Three groups:
+**Six of the nine age-banded crops are now in the plan** as Task 6 — Pineapple, Papaya, Avocado, Citrus, Guava, and Lanzones. Task 1's generalized row-key mechanism meant they needed no structural work, only data, and the full transcription in `suri/public/Nutrient Recommendation Guide.md` supplied values clean enough to use (with the inferences that task documents). Papaya carries one unresolved cell and may be dropped at Task 6 Step 0, which would land coverage at 35 rather than 36.
 
-**Ready to transcribe — complete, unflagged values (4 crops).** Papaya, Pineapple, the Avocado/Chico/Atis/Guyabano group, and the Lanzones/Rambutan/Mangosteen group. Only the axis work below stands in the way.
-
-**Needs a documented inference (2 crops).** Citrus is missing decimal points in three cells (`5 yrs` K 36-55 reads `15`, `6-10 yrs` K 0-35 reads `45`, `11-15 yrs` P 0-6.0 reads `40` — all obviously `.15`/`.45`/`.40` given their neighbours). Guava's third age row repeats the label `4-6 yrs` where the ascending values imply `7 yrs & up`. Both are safe to resolve with an explicit code comment recording the inference.
-
-**Genuinely blocked on source-data quality (3 crops).** These are anomalies *in the printed document*, so no better scan fixes them:
+**Three remain out of scope**, blocked on anomalies *in the printed document* that no better scan fixes:
 - **Coffee `6-10 yrs`** — K reads `.36 / .12 / .60`, non-monotonic where every other row decreases across K classes.
 - **Dragon Fruit** (and Basil) — all columns but the first are blank in the original, so no bands can be constructed at all.
 - **Abaca** — K reads `.045 / .03 / .015 / .05`, with the `251-300` value above the band below it. (Not flagged in the `.md`'s notes; caught during this plan's cross-check.)
 
-These three need an authoritative answer from DA RSL, not a re-scan.
-
-**The remaining structural work**, common to all of them: `BEARING_AGE_BAND` and `AGE_BANDS` grow; Papaya's bands are in **months** (`2-6 mos.`); and Pineapple's `Planted`/`Ratoon` and Abaca's `Pulp`/`Cordage` are crop-cycle axes — which Task 1's `DEFAULT_VARIETY_ROW` mechanism already handles the same way it handles Ginger and Onion. Completing the ready-plus-inferred six would take coverage from 30 to **36**; all nine reaches 39.
+These three need an authoritative answer from DA RSL, not a re-scan. Adding them afterwards is pure data — Abaca's `Pulp`/`Cordage` cycle axis is handled by the same `DEFAULT_VARIETY_ROW` mechanism Pineapple uses, and Coffee's and Dragon Fruit's age bands by the same `BEARING_AGE_BAND` mechanism the other tree crops use. That would take coverage from 36 to **39**.
 
 Everything else — the pipeline, the alias mechanism, the untrained-crop guard — already supports them the moment their rows exist.
 
