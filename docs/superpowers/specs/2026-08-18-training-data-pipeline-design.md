@@ -18,23 +18,31 @@ the training corpus → trigger a retrain → review its metrics (including a co
 currently-live model) → promote it live, or roll back, with no CLI, git, or CI involved for any of
 those steps.
 
-**Explicitly out of scope**: adding support for a *new* crop (one the system doesn't already
-recognize). Target values (N/P₂O₅/K₂O, formulations) for every training row are derived from a
-hand-transcribed official BSWM guide table (`data/nutrient_recommendation_guide.py`, sourced from
+**Also in scope: expanding crop coverage by transcription, not by building a CMS.** Target values
+(N/P₂O₅/K₂O, formulations) for every training row are derived from a hand-transcribed official
+BSWM guide table (`data/nutrient_recommendation_guide.py`, sourced from
 `suri/public/Nutrient Recommendation Guide.pdf`) keyed by crop — a crop with no entry there has no
-target to derive at all, for either the table-lookup or ML-ensemble path. Registering a new crop
-(adding its official rates to that guide, plus the API's crop enum) is a separate, larger project
-(effectively the CMS item deferred earlier in `2026-08-16-consultant-feedback-backlog.md` #7) and
-is not built here. The guide's own PDF source lists roughly 52 more crop entries beyond the 9
-currently coded, several sharing a row with an already-coded crop (e.g. Sorghum shares Corn's row,
-Camote/Yacon share Cassava's) — a useful fact for scoping that future project, not something this
-one touches.
+target to derive at all, for either the table-lookup or ML-ensemble path. The PDF itself already
+contains official rates for roughly 61 crops; only 9 are transcribed into the guide table so far.
+Since the data already exists (it doesn't need to be authored, just copied over — the same manual
+process already used for the current 9, cross-checked row-by-row against the PDF), this spec
+includes transcribing a further **30 rows covering 30 additional crop names, plus 9 "free" species
+that already share a row with an already-coded crop** (§2.1) — taking recognized coverage from 9
+to 39. This is a data task (editing constants in `data/nutrient_recommendation_guide.py` and the
+API's crop enum), not new architecture, and not an admin-facing CMS for authoring arbitrary crop
+data — an actual admin UI to *add or edit* guide entries through the browser (as opposed to a
+developer transcribing from the PDF) stays a separate, not-built-here project (the CMS item
+deferred earlier in `2026-08-16-consultant-feedback-backlog.md` #7).
 
-**Forward-compatibility, not new scope**: the upload validator must read its accepted-crop list
-from the existing single source of truth (`data.nutrient_recommendation_guide.CROPS`, already
-imported by `main.py`'s own crop validator) rather than hardcoding a separate copy. This costs
-nothing extra to build correctly and means that if a future project *does* add more crops to that
-list, this pipeline supports ingesting data for them automatically, with zero code changes here.
+**Forward-compatibility for whatever's still missing**: the upload validator must read its
+accepted-crop list from the existing single source of truth (`data.nutrient_recommendation_guide.
+CROPS`, already imported by `main.py`'s own crop validator) rather than hardcoding a separate copy.
+This costs nothing extra to build correctly and means that any crop still not transcribed after
+this pass — or any crop a future CMS project adds — is supported by this exact pipeline the moment
+it's added to that list, with zero code changes here. This is the actual scalability answer: DA
+providing real data for any of the ~22 remaining PDF crops (or a wholly new one) only ever requires
+a one-time guide-table registration step; the upload → retrain → promote loop already handles the
+rest.
 
 ## 2. Current State (for context — not being rebuilt, being reused)
 
@@ -53,6 +61,43 @@ list, this pipeline supports ingesting data for them automatically, with zero co
 - Real training data today: ~3,000 rows / 696 KB (`suri_real_training_data.csv`) — small enough
   that a full retrain is expected to take well under a minute.
 
+### 2.1 Crop Coverage Expansion
+
+Transcribed from `suri/public/Nutrient Recommendation Guide.pdf` into
+`data/nutrient_recommendation_guide.py` (rates, OM/P/K bands) and `main.py`'s crop enum, following
+the exact cross-check process already used and commented for the current 9 crops. Currently coded:
+Banana, Cacao, Cassava, Coconut, Corn, Mango, Peanut, Rice, Tomato.
+
+**30 new rows to transcribe** (relevant to Region 7 farmer-facing agriculture; ornamental,
+forestry, pasture, and fiber-crop rows in the PDF are excluded as out of scope for this tool):
+
+- **Vegetables**: Alugbati/Kangkong; Ampalaya; Asparagus; Cabbage/Pechay/Mustard/Spinach/Broccoli;
+  Cauliflower; Celery; Chayote; Cucumber/Muskmelon/Watermelon; Eggplant/Okra; Lettuce/Malunggay;
+  Radish/Carrots; Squash/Upo/Patola; Strawberry
+- **Industrial/plantation**: Coffee; Papaya; Pineapple; Sugarcane
+- **Condiments**: Garlic/Chili Pepper; Ginger; Onion
+- **Rootcrops**: Gabi/Ube/Yam/Taro; Potato/Singkamas
+- **Legumes**: Beans (String)/Lima/Sitao; Peas/Tapilan/Cowpea
+- **Fruit trees**: Avocado/Guyabano/Atis/Apple/Cashew/Jackfruit/Macopa/Tambis/Balimbing;
+  Citrus/Lime/Lemon/Orange/Calamansi/Passion Fruit; Guava; Lanzones/Rambutan/Mangosteen
+- **Others**: Abaca; Dragon Fruit
+
+**9 free species** — already covered by an existing coded crop's guide row, so recognizing them
+needs only a new crop-enum/alias entry, no new numbers to transcribe: Sorghum (shares Corn's row),
+Camote and Yacon (share Cassava's row), Soybean and Mongo (share Peanut's row), Santol, Caimito,
+Durian, and Marang (share Mango's row).
+
+**Left out of this pass** (present in the PDF, not transcribed here — still reachable later via
+the same forward-compatible `CROPS` list, §1): Fishpond algae, Roses, Rubber, Black Pepper, Lemon
+Grass/Centronella, Batao/Baguio Beans, Grapes, Grapevine, Forest/Pine trees, Castor Oil, Cotton,
+Jute/Kenaf, Legume Green Manure, Pasture Grasses, Ramie/Rattan, Tangan-Tangan, Tobacco Virginia,
+Palm Date/Oil, Herbs/Bamboo/Lagundi/Sambong, Basil, Mint Herb.
+
+Net effect: recognized crop coverage goes from 9 → **39**, before any new training data is even
+uploaded. This is a one-time transcription task, done once, independent of and prior to the
+upload/retrain pipeline itself — it just means the pipeline has 39 usable crops to receive data
+for on day one instead of 9.
+
 ## 3. Upload Template & Validation
 
 **Template**: a normalized CSV (Excel accepted, same columns) containing only *raw measurements*,
@@ -65,7 +110,7 @@ one row per soil test:
 | `variety`, `cultivation_method`, `age_band` | no | Crop-dependent, same rules `main.py` already applies via `resolve_variety`/`resolve_cultivation_method`/`resolve_age_band` |
 | `ph` | yes | 0–14 |
 | `organic_matter_pct`, `phosphorus_ppm`, `potassium_cmol_kg` | yes | All three required — without them `nutrient_requirements()` cannot derive a target, so a row missing any one is rejected, not silently imputed (imputation is an inference-time fallback for incomplete STK/IoT requests, not something training data should ever be built on) |
-| `farm_area_sqm`, `sampling_site`, `date_of_sampling` | no | Stored, not model features (matches §3.1/§3.3 of the original spec) |
+| `farm_area_sqm`, `sampling_site`, `date_of_sampling` | no | Stored, not model features (matches §3.1/§3.3 of the original pipeline spec) |
 
 `data_source` is not a template column — every admin-uploaded row is real lab data, so the backend
 sets it to `"lab"` unconditionally, matching what `parse_real_soil_database.py` already does.
@@ -168,19 +213,22 @@ does for `/predict`). Three views:
   fixture dataset, asserting registry state and the actually-loaded in-memory model at each step.
 - Concurrency test: fire `/predict` while a promote call is in flight; assert every response is
   fully served by either the old or the new model, never a mixed/inconsistent state.
-- **New-crop-data regression test** (not new-crop *support*, per §1's scope line): confirm that
-  uploading additional rows for an already-weak crop (e.g. Tomato, currently 20 real rows per the
-  README's known limitations) and retraining measurably changes that crop's per-crop metrics —
-  the concrete proof this pipeline does what it's for.
+- **More-data-for-an-existing-crop regression test**: confirm that uploading additional rows for
+  an already-weak crop (e.g. Tomato, currently 20 real rows per the README's known limitations) and
+  retraining measurably changes that crop's per-crop metrics — the concrete proof this pipeline
+  does what it's for. Separate from §2.1's transcription tests, which prove a newly-added crop's
+  guide values are correct, not that the retrain pipeline improves with more data.
 
 ## 9. Deliverables
 
 ```
 suri-ml-backend/
+  data/nutrient_recommendation_guide.py  # §2.1 — expanded from 9 to 39 crops, transcribed from the PDF
+  main.py                          # §2.1 crop enum expansion; §5 swappable load_artifacts(), new endpoints
   data/training_upload.py         # §3 — parse/validate template, reuse derivation functions
   ml/retrain_job.py                # §4 — background job wrapper around ml/train.py
   supabase/migrations/<date>_ml_model_versions.sql   # §5
-  main.py                          # changed: swappable load_artifacts(), new endpoints
+  tests/test_nutrient_recommendation_guide.py  # §2.1 — golden-value fixtures for each newly transcribed row
   tests/test_training_upload.py    # §8
   tests/test_retrain_pipeline.py   # §8
 
@@ -193,8 +241,12 @@ suri/
 
 ## 10. Explicitly Out of Scope
 
-- Adding support for any crop not already in `data.nutrient_recommendation_guide.CROPS` (§1).
-- A Crop Reference CMS for editing the official guide table itself — related, deferred separately.
+- Adding support for any crop **not** listed in §2.1 (i.e. anything from the PDF's remaining ~22
+  rows, or any crop outside the PDF entirely). Still reachable later with zero pipeline changes,
+  per §1's forward-compatibility note — just not transcribed as part of this project.
+- A Crop Reference CMS — an admin-facing UI to *author or edit* guide-table entries through the
+  browser, as opposed to a developer transcribing official rates from the PDF (§2.1's method).
+  Related, deferred separately.
 - Farmer-facing maintenance mode / pausing `/predict` during retraining — decided against; the
   hot-swap architecture makes it unnecessary (§4, §7).
 - Resuming an interrupted training job after an instance reboot.
