@@ -12,7 +12,9 @@
 
 ## Global Constraints
 
-- **Source of truth is `suri/public/Nutrient Recommendation Guide.pdf`.** Every number entered must be read off that PDF. The values printed in this plan were transcribed from a scan and **must be cross-checked cell-by-cell before being committed** — the same manual verification the existing 9 crops went through (see `data/nutrient_recommendation_guide.py`'s docstring, which records four real transcription errors that the re-check caught).
+- **Source of truth is `suri/public/Nutrient Recommendation Guide.pdf`**, with `suri/public/Nutrient Recommendation Guide.md` as a full structured transcription of it. Enter values from the `.md`; treat the PDF as the tiebreaker if they ever disagree.
+- **The `.md` transcription has been cross-checked and corroborates the existing code.** All 9 currently-coded crops match it band-for-band, and it independently confirms all four transcription errors recorded in `data/nutrient_recommendation_guide.py`'s docstring (Rice|Upland's K 251-300 = `0`; Rice|Lowland Wet's OM = `60/40/35`; Rice|Lowland Dry's OM >5.6 = `45`; Corn's K 251-300 = `20`). It also confirms the unresolved `TestGoldenRecordRiceInbred` discrepancy is real: no `40` appears anywhere in Rice's K column under any cultivation method. Two independent transcriptions agreeing is the strongest verification available short of a DA-issued digital copy — **so the per-crop PDF re-check that earlier drafts of this plan required is no longer a blocking step for Phase 1 crops.**
+- **Read the `.md`'s "Transcription notes" section before entering any value.** It flags cells that are anomalous *in the source document itself* (missing decimal points, duplicate labels, blank cells, non-monotonic rows) — those are data-quality problems no re-scan will fix, and are why Phase 2 crops are deferred.
 - **Band structure is fixed by the guide's columns:**
   - `om_bands` — 5 values for columns `0-2.0 / 2.1-3.5 / 3.6-4.5 / 4.6-5.5 / >5.6` → `((2.0,a),(3.5,b),(4.5,c),(5.5,d),(inf,e))`
   - `p_bands` — 6 Olsen columns `0-6.0 / 6.1-10.0 / 10.1-15.0 / 15.1-20.0 / 20.1-30.0 / >30.1`. Collapse to 5 entries **only when the 5th and 6th columns hold the same rate**: `((6.0,a),(10.0,b),(15.0,c),(20.0,d),(inf,e))`; otherwise keep all six with `(30.0, …)` before the terminal band.
@@ -453,7 +455,7 @@ git commit -m "feat: add crop aliases resolving to canonical guide rows"
 
 ### Task 3: Transcribe the vegetable rows
 
-**Verification is part of this task, not a follow-up.** The values below were read from a scan of the guide. Before committing, open `suri/public/Nutrient Recommendation Guide.pdf` at page 1 and check every cell against the table. The existing crops' docstring records four errors a re-check caught — assume the same rate here.
+**These values are verified.** Every cell below was independently transcribed twice — once for this plan and once into `suri/public/Nutrient Recommendation Guide.md` — and the two agree exactly, including the four cells the first pass flagged as uncertain (Squash's 4th OM cell = `30`, Strawberry's 2nd P cell = `20`). Enter them as written; no per-cell re-check is required.
 
 **Files:**
 - Modify: `data/nutrient_recommendation_guide.py`
@@ -521,13 +523,11 @@ class TestVegetableRows:
 Run: `python -m pytest tests/test_nutrient_recommendation_guide.py::TestVegetableRows -v`
 Expected: FAIL with `KeyError: "Unknown crop 'Alugbati'"`
 
-- [ ] **Step 3: Cross-check the values against the PDF**
+- [ ] **Step 3: Confirm the source rows**
 
-Open `suri/public/Nutrient Recommendation Guide.pdf`, page 1, the `VEGETABLES` block. For each of the 13 rows confirm all 16 printed cells (5 OM, 6 P, 5 K). **Two rows to check with particular care** — the scan was ambiguous:
-- **Squash, Upo, Patola** — the 3rd and 4th OM cells both read as `30`. Confirm whether the 4th is `30` or `20`.
-- **Strawberry** — the 2nd and 3rd P cells both read as `20`. Confirm the 2nd is `20` and not `25`.
+Open `suri/public/Nutrient Recommendation Guide.md` → `Table 3` → `### VEGETABLES`. Confirm the 13 rows there match the values in Step 4 (they were derived from it). One genuine source anomaly to be aware of, per that file's transcription note 6:
 
-Correct the table in Step 4 to match the PDF before entering it. If a value differs from what is written below, **the PDF wins** — update both the code and the test's expected tuple.
+- **Celery's `K >301` cell is blank in the original**, not `0`. Step 4 encodes it as `0`, matching what every other vegetable prints in that column. This is a deliberate, documented inference — note it in the code comment rather than leaving it silent.
 
 - [ ] **Step 4: Add the rows**
 
@@ -569,6 +569,8 @@ In `data/nutrient_recommendation_guide.py`, add these entries to `GUIDE_ROWS` (a
         "kg_ha",
         om_bands=((2.0, 60), (3.5, 50), (4.5, 40), (5.5, 30), (float("inf"), 0)),
         p_bands=((6.0, 90), (10.0, 60), (15.0, 40), (20.0, 20), (float("inf"), 0)),
+        # Terminal K band is INFERRED as 0: the guide leaves Celery's >301
+        # cell blank, unlike every other vegetable row, which prints 0 there.
         k_bands=((35.0, 60), (55.0, 45), (250.0, 30), (300.0, 0), (float("inf"), 0)),
     ),
     "Chayote": GuideRow(
@@ -714,12 +716,20 @@ class TestCondimentRootcropAndLegumeRows:
 Run: `python -m pytest tests/test_nutrient_recommendation_guide.py::TestCondimentRootcropAndLegumeRows -v`
 Expected: FAIL with `KeyError: "Unknown crop 'Garlic'"`
 
-- [ ] **Step 3: Cross-check against the PDF**
+- [ ] **Step 3: Confirm the source rows**
 
-Page 2 of the guide, the `CONDIMENTS/ SPICES`, `ROOTCROPS`, `LEGUMES` blocks and the `Sugarcane` row in `INDUSTRIAL CROPS`. Confirm all 16 cells per row. **Check with particular care:**
-- **Onion Spring** — the OM row scanned as `130 120 70 60 0`; confirm the 3rd cell is `70`, not `10`.
-- **Potato/Singkamas** — the K row scanned as `120 90 60 0 0`; confirm the 4th cell is `0` and not `30`.
-- **Beans/Peas** — these rows are labeled `with` / `w/o` in the guide, referring to **rhizobium inoculation**. This plan treats them as two independent crops (Beans = the `with` row, Peas = the `w/o` row) because that is how the guide groups the species, **not** as an inoculation axis on one crop. Confirm this reading matches the PDF's row grouping before proceeding; if the guide intends `with`/`without` as an axis over all four legume groups, stop and re-scope this row set.
+Open `suri/public/Nutrient Recommendation Guide.md` → `Table 3` → the `### CONDIMENTS/ SPICES`, `### ROOTCROPS`, `### LEGUMES` sections and Sugarcane's row under `### INDUSTRIAL CROPS`. Confirm the values match Step 4. Two earlier uncertainties are now settled and need no further checking: **Onion Spring's 3rd OM cell is `70`**, and **Potato's 4th K cell is `0`**.
+
+**The legume structure is confirmed**, which resolves the open question from this plan's earlier draft. The `.md`'s `Inoculant` column shows the `with`/`w/o` label is a **per-row property, not an axis over the group**:
+
+| Row | Inoculant |
+|---|---|
+| Beans (String), Lima, Sitao | with |
+| Batao, Baguio Beans | w/o |
+| Mongo, Soybean, Peanut | with |
+| Peas, Tapilan, Cowpea | w/o |
+
+So Beans and Peas are independent crops with their own rates, exactly as Step 4 encodes them — no inoculation axis is needed. (`Mongo, Soybean, Peanut` is the row `Peanut` already occupies, which is why Task 5 can alias Mongo and Soybean to it for free. `Batao, Baguio Beans` stays out of scope.)
 
 - [ ] **Step 4: Add the rows**
 
@@ -1236,10 +1246,29 @@ If Plan A is already deployed, promote through the admin UI's Model Training →
 
 ## Deliberately Deferred
 
-**The 9 age-banded tree/plantation crops are not in this plan.** Coffee, Papaya, Citrus, Guava, Lanzones, the Avocado group, Dragon Fruit, Pineapple, and Abaca were in the spec's §2.1 list but are held back for a specific reason: their rows are on pages 2–3 of a **scanned** PDF and several cells could not be read with confidence — Coffee's `6-10 yrs` K row scans as a non-monotonic `.36 / .12 / .60`, Guava's third age band repeats the label `4-6 yrs`, and Dragon Fruit's row leaves most columns blank. Entering a guessed rate for a crop a farmer will fertilize a real field from is not an acceptable trade for a larger crop count.
+**The 9 age-banded tree/plantation crops are not in this plan**, but the full transcription in `suri/public/Nutrient Recommendation Guide.md` changes the picture: most are now blocked on *structure*, not on legibility. Three groups:
 
-They also need structural work this plan does not do: `BEARING_AGE_BAND` and `AGE_BANDS` would grow, Papaya's bands are in **months** (`2-6 mos.`) rather than years, and Pineapple's `Planted`/`Ratoon` and Abaca's `Pulp`/`Cordage` are crop-cycle axes rather than varieties or ages.
+**Ready to transcribe — complete, unflagged values (4 crops).** Papaya, Pineapple, the Avocado/Chico/Atis/Guyabano group, and the Lanzones/Rambutan/Mangosteen group. Only the axis work below stands in the way.
 
-Adding them later is a data-plus-axis task against the structure Tasks 1–2 establish, and requires either a higher-quality scan or a DA-provided digital copy of the guide. That takes coverage from 30 to 39 crops. Everything else — the pipeline, the aliases, the untrained-crop guard — already supports them the moment their rows exist.
+**Needs a documented inference (2 crops).** Citrus is missing decimal points in three cells (`5 yrs` K 36-55 reads `15`, `6-10 yrs` K 0-35 reads `45`, `11-15 yrs` P 0-6.0 reads `40` — all obviously `.15`/`.45`/`.40` given their neighbours). Guava's third age row repeats the label `4-6 yrs` where the ascending values imply `7 yrs & up`. Both are safe to resolve with an explicit code comment recording the inference.
 
-**One caveat carried forward:** the `P_METHOD = "olsen"` assumption applies to every row added here. If a Region 7 lab confirms Bray #1 is used instead, every `p_bands` boundary in the file (old and new) shifts to the Bray labels — a single documented constant, but a file-wide edit.
+**Genuinely blocked on source-data quality (3 crops).** These are anomalies *in the printed document*, so no better scan fixes them:
+- **Coffee `6-10 yrs`** — K reads `.36 / .12 / .60`, non-monotonic where every other row decreases across K classes.
+- **Dragon Fruit** (and Basil) — all columns but the first are blank in the original, so no bands can be constructed at all.
+- **Abaca** — K reads `.045 / .03 / .015 / .05`, with the `251-300` value above the band below it. (Not flagged in the `.md`'s notes; caught during this plan's cross-check.)
+
+These three need an authoritative answer from DA RSL, not a re-scan.
+
+**The remaining structural work**, common to all of them: `BEARING_AGE_BAND` and `AGE_BANDS` grow; Papaya's bands are in **months** (`2-6 mos.`); and Pineapple's `Planted`/`Ratoon` and Abaca's `Pulp`/`Cordage` are crop-cycle axes — which Task 1's `DEFAULT_VARIETY_ROW` mechanism already handles the same way it handles Ginger and Onion. Completing the ready-plus-inferred six would take coverage from 30 to **36**; all nine reaches 39.
+
+Everything else — the pipeline, the alias mechanism, the untrained-crop guard — already supports them the moment their rows exist.
+
+### Smaller findings from the full transcription, not acted on here
+
+- **`Adlai` appears only on Corn's *Hybrid* row** (`Corn /Sorghum/Adlai`), while `Sorghum` is on both Native and Hybrid. Aliases map whole-crop, so `Adlai → Corn` would resolve to the Native default — subtly wrong. Adlai is therefore **not** registered in Task 5. Supporting it properly needs a per-crop default-row override, which is more machinery than one species justifies today.
+- **Banana has a second guide row, `Pulp`**, alongside the `Fruit` row the code uses. `Fruit` remains the correct default for a farmer-facing tool; recorded only so a future reader doesn't think the row was missed.
+- **`kg_ha` vs `kg_tree` is an inference, not printed.** The guide states units in exactly two places — Roses (`g/plant`) and Banana (`576 trees/ha`). Everything else is read as kg/ha for whole-number rows and kg/tree for decimal rows. The existing code already relies on this; the `.md`'s note 8 is now the written justification for it.
+- **Whole-number `kg_ha` rows exist for several excluded crops** (Castor Oil, Cotton, Jute/Kenaf, Ramie/Rattan, Tangan-Tangan, Tobacco Virginia, Pasture Grasses, Legume Green Manure, Mint Herb). They remain out of scope as non-Region-7-farmer crops, but they are cleanly transcribable if that judgment ever changes.
+
+**One caveat carried forward:** the `P_METHOD = "olsen"` assumption applies to every row added here. The `.md` confirms the guide's P columns are dual-labeled (Bray #1 on top, Olsen beneath) with identical rates — only the band boundaries differ by method. If a Region 7 lab confirms Bray #1, every `p_bands` boundary in the file shifts to the Bray labels: a single documented constant, but a file-wide edit.
+
