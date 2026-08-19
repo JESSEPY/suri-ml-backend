@@ -146,6 +146,24 @@ def train(frame: pd.DataFrame, output_dir: str | None = None, seed: int = RANDOM
     return metadata
 
 
+SUPABASE_PAGE_SIZE = 1000
+
+
+def fetch_all_rows(client, table: str, page_size: int = SUPABASE_PAGE_SIZE) -> list[dict]:
+    """PostgREST returns at most 1000 rows per response regardless of how many
+    match, and does so without any error or truncation signal. A bare
+    .select("*") therefore silently caps the training corpus -- read it in
+    explicit ranges until a short page proves the end was reached."""
+    rows: list[dict] = []
+    start = 0
+    while True:
+        page = client.table(table).select("*").range(start, start + page_size - 1).execute().data
+        rows.extend(page)
+        if len(page) < page_size:
+            return rows
+        start += page_size
+
+
 def _load_frame(csv_path: str | None) -> pd.DataFrame:
     if csv_path:
         # keep_default_na=False + explicit na_values=[""]: several of this
@@ -160,8 +178,7 @@ def _load_frame(csv_path: str | None) -> pd.DataFrame:
         # still correctly treats as NaN.
         return pd.read_csv(csv_path, keep_default_na=False, na_values=[""])
     from data.ingest_to_supabase import TABLE, get_client
-    rows = get_client().table(TABLE).select("*").execute().data
-    return pd.DataFrame(rows)
+    return pd.DataFrame(fetch_all_rows(get_client(), TABLE))
 
 
 def _print_summary(metadata: dict) -> None:

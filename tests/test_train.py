@@ -181,3 +181,67 @@ class TestLoadFrameCsvNoneSentinel:
     def test_genuinely_blank_numeric_cell_still_reads_as_nan(self, csv_path):
         loaded = _load_frame(csv_path)
         assert pd.isna(loaded.loc[1, "organic_matter_pct"])
+
+
+class TestFetchAllRowsPaginates:
+    """PostgREST caps one response at 1000 rows; the real corpus is larger.
+    A single .select("*") would silently return a truncated corpus and train
+    on it without any error surfacing."""
+
+    def test_keeps_requesting_until_a_short_page_arrives(self):
+        from ml.train import fetch_all_rows
+
+        pages = [
+            [{"laboratory_code": f"A{i}"} for i in range(1000)],
+            [{"laboratory_code": f"B{i}"} for i in range(1000)],
+            [{"laboratory_code": f"C{i}"} for i in range(76)],
+        ]
+        requested_ranges = []
+
+        class FakeQuery:
+            def __init__(self, page):
+                self._page = page
+
+            def range(self, start, end):
+                requested_ranges.append((start, end))
+                return self
+
+            def execute(self):
+                return type("R", (), {"data": self._page})()
+
+        class FakeTable:
+            def __init__(self):
+                self._calls = 0
+
+            def select(self, _columns):
+                page = pages[self._calls]
+                self._calls += 1
+                return FakeQuery(page)
+
+        class FakeClient:
+            def __init__(self):
+                self._table = FakeTable()
+
+            def table(self, _name):
+                return self._table
+
+        rows = fetch_all_rows(FakeClient(), "ml_soil_training_data")
+
+        assert len(rows) == 2076
+        assert requested_ranges == [(0, 999), (1000, 1999), (2000, 2999)]
+
+    def test_single_short_page_stops_immediately(self):
+        from ml.train import fetch_all_rows
+
+        class FakeQuery:
+            def range(self, start, end):
+                return self
+
+            def execute(self):
+                return type("R", (), {"data": [{"laboratory_code": "A"}]})()
+
+        class FakeClient:
+            def table(self, _name):
+                return type("T", (), {"select": lambda _self, _c: FakeQuery()})()
+
+        assert len(fetch_all_rows(FakeClient(), "t")) == 1
