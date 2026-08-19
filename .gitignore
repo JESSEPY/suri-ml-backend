@@ -21,8 +21,8 @@ __pycache__/
 # If you retrain and want the new version deployed, update the pinned
 # path here to match, then commit the new (small) artifact directory.
 ml/artifacts/*
-!ml/artifacts/2026-08-06-055755/
-!ml/artifacts/2026-08-06-055755/**
+!ml/artifacts/2026-08-19-160748/
+!ml/artifacts/2026-08-19-160748/**
 
 # Virtual environments
 .venv/
