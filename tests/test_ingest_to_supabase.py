@@ -93,3 +93,38 @@ class TestLoadFrameCsvNoneSentinel:
     def test_genuinely_blank_numeric_cell_becomes_none_in_records(self, csv_path):
         records = frame_to_records(_load_frame(csv_path))
         assert records[1]["organic_matter_pct"] is None
+
+
+class TestIngestRecords:
+    def test_upserts_every_record_in_batches_on_the_composite_key(self):
+        from data.ingest_to_supabase import ingest_records
+
+        captured = []
+
+        class FakeTable:
+            def upsert(self, batch, on_conflict):
+                captured.append((len(batch), on_conflict))
+                return self
+
+            def execute(self):
+                return None
+
+        class FakeClient:
+            def table(self, _name):
+                return FakeTable()
+
+        records = [{"laboratory_code": f"L{i}", "data_source": "lab"} for i in range(7)]
+        total = ingest_records(records, batch_size=3, client=FakeClient())
+
+        assert total == 7
+        assert [size for size, _ in captured] == [3, 3, 1]
+        assert {conflict for _, conflict in captured} == {"laboratory_code,data_source"}
+
+    def test_empty_input_writes_nothing(self):
+        from data.ingest_to_supabase import ingest_records
+
+        class ExplodingClient:
+            def table(self, _name):
+                raise AssertionError("must not touch Supabase for an empty batch")
+
+        assert ingest_records([], client=ExplodingClient()) == 0

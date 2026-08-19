@@ -43,6 +43,24 @@ def frame_to_records(frame: pd.DataFrame) -> list[dict]:
     return frame.astype(object).where(pd.notna(frame), None).to_dict("records")
 
 
+def ingest_records(
+    records: list[dict], batch_size: int = DEFAULT_BATCH_SIZE, client: Client | None = None
+) -> int:
+    """Upsert already-built rows (the admin-upload path, where rows were
+    validated and derived in memory rather than read from a CSV on disk).
+    Same idempotent composite-key upsert as ingest(); the `client` parameter
+    exists so tests can inject a fake instead of reaching Supabase."""
+    if not records:
+        return 0
+
+    client = client or get_client()
+    total = 0
+    for batch in chunked(records, batch_size):
+        client.table(TABLE).upsert(batch, on_conflict="laboratory_code,data_source").execute()
+        total += len(batch)
+    return total
+
+
 def _load_frame(csv_path: str) -> pd.DataFrame:
     # keep_default_na=False + explicit na_values=[""]: several of this
     # schema's nominal columns (variety/cultivation_method/age_band) use
