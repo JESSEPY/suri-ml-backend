@@ -476,6 +476,16 @@ CROP_ALIASES: dict[str, str] = {
     "Sitao": "Beans",
     "Tapilan": "Peas",
     "Cowpea": "Peas",
+    # Species printed on an existing crop's own guide row -- no new rates.
+    "Sorghum": "Corn",
+    "Camote": "Cassava",
+    "Yacon": "Cassava",
+    "Soybean": "Peanut",
+    "Mongo": "Peanut",
+    "Santol": "Mango",
+    "Caimito": "Mango",
+    "Durian": "Mango",
+    "Marang": "Mango",
 }
 
 

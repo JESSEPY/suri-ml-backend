@@ -106,7 +106,7 @@ class TestNutrientRequirements:
 
     def test_unknown_crop_raises(self):
         with pytest.raises(KeyError):
-            nutrient_requirements("Durian", om=2.5, p_ppm=15.0, k_cmol_kg=0.3)
+            nutrient_requirements("Nonesuch", om=2.5, p_ppm=15.0, k_cmol_kg=0.3)
 
     def test_variety_selects_a_different_guide_row(self):
         native = nutrient_requirements("Corn", om=1.0, p_ppm=15.0, k_cmol_kg=0.3, variety="OPV")
@@ -197,7 +197,7 @@ class TestMaxTotalNeed:
 
     def test_unknown_crop_raises(self):
         with pytest.raises(KeyError):
-            max_total_need("Durian")
+            max_total_need("Nonesuch")
 
     @pytest.mark.parametrize("crop", ["Rice", "Corn", "Cassava", "Peanut", "Tomato",
                                        "Mango", "Cacao", "Coconut", "Banana"])
@@ -406,7 +406,7 @@ class TestCondimentRootcropAndLegumeRows:
 
     @pytest.mark.parametrize("alias,canonical", [
         ("Chili Pepper", "Garlic"),
-        pytest.param("Camote", "Cassava", marks=pytest.mark.xfail(reason="registered in Task 5")),
+        ("Camote", "Cassava"),
         ("Ube", "Gabi"),
         ("Yam", "Gabi"), ("Taro", "Gabi"), ("Singkamas", "Potato"),
         ("Sitao", "Beans"), ("Lima", "Beans"), ("Cowpea", "Peas"), ("Tapilan", "Peas"),
@@ -415,3 +415,23 @@ class TestCondimentRootcropAndLegumeRows:
         from data.nutrient_recommendation_guide import resolve_crop
 
         assert resolve_crop(alias) == canonical
+
+
+class TestFreeSpeciesAliases:
+    @pytest.mark.parametrize("alias,canonical", [
+        ("Sorghum", "Corn"), ("Camote", "Cassava"), ("Yacon", "Cassava"),
+        ("Soybean", "Peanut"), ("Mongo", "Peanut"), ("Santol", "Mango"),
+        ("Caimito", "Mango"), ("Durian", "Mango"), ("Marang", "Mango"),
+    ])
+    def test_alias_resolves_and_predicts_identically(self, alias, canonical):
+        from data.nutrient_recommendation_guide import nutrient_requirements, resolve_crop
+
+        assert resolve_crop(alias) == canonical
+        assert nutrient_requirements(alias, 2.5, 15.0, 0.3) == \
+               nutrient_requirements(canonical, 2.5, 15.0, 0.3)
+
+    def test_tree_crop_aliases_keep_the_tree_unit(self):
+        from data.nutrient_recommendation_guide import target_unit_for_crop
+
+        for alias in ["Santol", "Caimito", "Durian", "Marang"]:
+            assert target_unit_for_crop(alias) == "kg_tree"
