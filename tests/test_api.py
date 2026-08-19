@@ -305,3 +305,40 @@ class TestAliasCrops:
         assert alias_body["target_n"] == canonical_body["target_n"]
         assert alias_body["target_p2o5"] == canonical_body["target_p2o5"]
         assert alias_body["target_k2o"] == canonical_body["target_k2o"]
+
+
+class TestUntrainedCropGuard:
+    """A crop the model never saw must not get a model-path prediction --
+    its one-hot column was never active in training, so the answer would be
+    the global mean wearing a crop's name."""
+
+    def test_incomplete_request_for_an_untrained_crop_is_refused(self, client, monkeypatch):
+        import main as service
+
+        monkeypatch.setattr(service, "trained_crops", lambda bundle: {"Corn"})
+        response = client.post("/predict", json={
+            "crop": "Cabbage", "data_source": "stk", "ph": 6.4,
+        })
+        assert response.status_code == 422
+        body = response.json()
+        assert "Cabbage" in body["detail"]
+        assert "organic_matter_pct" in body["detail"]
+
+    def test_complete_request_for_an_untrained_crop_still_succeeds(self, client, monkeypatch):
+        """The guide table has the exact answer regardless of training data."""
+        import main as service
+
+        monkeypatch.setattr(service, "trained_crops", lambda bundle: {"Corn"})
+        response = client.post("/predict", json={
+            "crop": "Cabbage", "data_source": "lab", "ph": 6.4,
+            "organic_matter_pct": 2.8, "phosphorus_ppm": 18.0, "potassium_cmol_kg": 0.35,
+        })
+        assert response.status_code == 200
+        assert response.json()["source"] == "table-lookup"
+
+    def test_incomplete_request_for_a_trained_crop_still_succeeds(self, client):
+        response = client.post("/predict", json={
+            "crop": "Corn", "data_source": "iot", "ph": 6.4,
+        })
+        assert response.status_code == 200
+        assert response.json()["source"] == "ml-ensemble"

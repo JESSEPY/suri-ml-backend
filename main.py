@@ -297,6 +297,13 @@ def _build_feature_row(request: SoilTestRequest) -> pd.DataFrame:
 _TARGET_KEYS = ("target_n", "target_p2o5", "target_k2o")
 
 
+def trained_crops(bundle: dict) -> set[str]:
+    """Crops the loaded model actually has held-out metrics for. Metrics are
+    computed per crop over the test split, so presence here means the model
+    both trained on and was evaluated for that crop."""
+    return set(bundle["metadata"].get("metrics", {}).get("by_crop", {}))
+
+
 def _compute_confidence(bundle: dict, crop: str, X) -> Confidence | None:
     """Tier 1: this crop's historical held-out accuracy for the worst
     (lowest-confidence) of the three targets, since a report shows all
@@ -390,6 +397,22 @@ def predict(request: SoilTestRequest, background_tasks: BackgroundTasks) -> Pred
         source = "table-lookup"
         confidence = None
     else:
+        canonical = resolve_crop(request.crop)
+        known = trained_crops(bundle)
+        if known and canonical not in known:
+            # The guide table can still answer this crop exactly -- it just
+            # needs the full soil panel. Say so, rather than returning a
+            # number derived from no crop-specific training signal.
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"No training data exists yet for {request.crop!r}, so an estimate from "
+                    f"an incomplete soil reading is not available. Supply "
+                    f"organic_matter_pct, phosphorus_ppm, and potassium_cmol_kg for an exact "
+                    f"result from the official guide, or upload lab data for this crop and "
+                    f"retrain."
+                ),
+            )
         try:
             X = bundle["preprocessor"].transform(features)
         except ValueError as error:
