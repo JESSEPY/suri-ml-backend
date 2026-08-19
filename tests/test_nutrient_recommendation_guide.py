@@ -372,3 +372,46 @@ class TestVegetableRows:
         from data.nutrient_recommendation_guide import resolve_crop
 
         assert resolve_crop(alias) == canonical
+
+
+class TestCondimentRootcropAndLegumeRows:
+    @pytest.mark.parametrize("crop,om,p,k,expected", [
+        ("Garlic", 1.0, 3.0, 20.0, (120, 80, 150)),
+        ("Garlic", 6.0, 35.0, 400.0, (0, 0, 0)),
+        ("Onion", 1.0, 3.0, 20.0, (120, 80, 150)),
+        ("Gabi", 1.0, 3.0, 20.0, (40, 60, 90)),
+        ("Potato", 1.0, 3.0, 20.0, (120, 100, 120)),
+        ("Beans", 1.0, 3.0, 20.0, (10, 60, 60)),
+        ("Peas", 1.0, 3.0, 20.0, (20, 40, 45)),
+        ("Sugarcane", 1.0, 3.0, 20.0, (180, 120, 160)),
+        ("Sugarcane", 5.0, 18.0, 280.0, (75, 20, 60)),
+    ])
+    def test_band_lookups(self, crop, om, p, k, expected):
+        from data.nutrient_recommendation_guide import K_CMOL_TO_PPM, nutrient_requirements
+
+        assert nutrient_requirements(crop, om, p, k / K_CMOL_TO_PPM) == expected
+
+    def test_ginger_defaults_to_the_improved_row(self):
+        from data.nutrient_recommendation_guide import K_CMOL_TO_PPM, nutrient_requirements
+
+        k = 20.0 / K_CMOL_TO_PPM
+        assert nutrient_requirements("Ginger", 1.0, 3.0, k) == (60, 60, 120)
+        assert nutrient_requirements("Ginger", 1.0, 3.0, k, variety="Local") == (40, 50, 90)
+
+    def test_onion_spring_is_a_separate_row(self):
+        from data.nutrient_recommendation_guide import K_CMOL_TO_PPM, nutrient_requirements
+
+        k = 20.0 / K_CMOL_TO_PPM
+        assert nutrient_requirements("Onion", 1.0, 3.0, k, variety="Spring") == (130, 60, 45)
+
+    @pytest.mark.parametrize("alias,canonical", [
+        ("Chili Pepper", "Garlic"),
+        pytest.param("Camote", "Cassava", marks=pytest.mark.xfail(reason="registered in Task 5")),
+        ("Ube", "Gabi"),
+        ("Yam", "Gabi"), ("Taro", "Gabi"), ("Singkamas", "Potato"),
+        ("Sitao", "Beans"), ("Lima", "Beans"), ("Cowpea", "Peas"), ("Tapilan", "Peas"),
+    ])
+    def test_co_listed_species_alias_to_their_row(self, alias, canonical):
+        from data.nutrient_recommendation_guide import resolve_crop
+
+        assert resolve_crop(alias) == canonical

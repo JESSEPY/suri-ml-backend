@@ -111,6 +111,8 @@ RICE_CULTIVATION_METHODS = ("Upland", "Lowland Wet", "Lowland Dry")
 VARIETIES_BY_CROP: dict[str, tuple[str, ...]] = {
     "Rice": ("Hybrid", "Inbred"),
     "Corn": ("OPV", "Hybrid"),
+    "Ginger": ("Improved", "Local"),
+    "Onion": ("Bulb", "Spring"),
 }
 
 # Guide row key -> GuideRow. Keys: bare crop name for crops the guide
@@ -358,6 +360,70 @@ GUIDE_ROWS: dict[str, GuideRow] = {
         p_bands=((6.0, 30), (10.0, 20), (15.0, 20), (20.0, 10), (float("inf"), 0)),
         k_bands=((35.0, 60), (55.0, 48), (250.0, 30), (300.0, 0), (float("inf"), 0)),
     ),
+    # --- CONDIMENTS / SPICES (guide page 2) -----------------------------
+    "Garlic": GuideRow(
+        "kg_ha",
+        om_bands=((2.0, 120), (3.5, 90), (4.5, 60), (5.5, 30), (float("inf"), 0)),
+        p_bands=((6.0, 80), (10.0, 60), (15.0, 40), (20.0, 20), (float("inf"), 0)),
+        k_bands=((35.0, 150), (55.0, 120), (250.0, 90), (300.0, 60), (float("inf"), 0)),
+    ),
+    "Ginger|Improved": GuideRow(
+        "kg_ha",
+        om_bands=((2.0, 60), (3.5, 40), (4.5, 20), (5.5, 0), (float("inf"), 0)),
+        p_bands=((6.0, 60), (10.0, 40), (15.0, 20), (20.0, 10), (float("inf"), 0)),
+        k_bands=((35.0, 120), (55.0, 90), (250.0, 60), (300.0, 30), (float("inf"), 0)),
+    ),
+    "Ginger|Local": GuideRow(
+        "kg_ha",
+        om_bands=((2.0, 40), (3.5, 30), (4.5, 20), (5.5, 0), (float("inf"), 0)),
+        p_bands=((6.0, 50), (10.0, 40), (15.0, 20), (20.0, 10), (float("inf"), 0)),
+        k_bands=((35.0, 90), (55.0, 60), (250.0, 45), (300.0, 30), (float("inf"), 0)),
+    ),
+    "Onion|Bulb": GuideRow(
+        "kg_ha",
+        om_bands=((2.0, 120), (3.5, 90), (4.5, 60), (5.5, 30), (float("inf"), 0)),
+        p_bands=((6.0, 80), (10.0, 60), (15.0, 40), (20.0, 20), (float("inf"), 0)),
+        k_bands=((35.0, 150), (55.0, 120), (250.0, 90), (300.0, 60), (float("inf"), 0)),
+    ),
+    "Onion|Spring": GuideRow(
+        "kg_ha",
+        om_bands=((2.0, 130), (3.5, 120), (4.5, 70), (5.5, 60), (float("inf"), 0)),
+        p_bands=((6.0, 60), (10.0, 45), (15.0, 35), (20.0, 20), (float("inf"), 0)),
+        k_bands=((35.0, 45), (55.0, 35), (250.0, 30), (300.0, 0), (float("inf"), 0)),
+    ),
+    # --- ROOTCROPS (guide page 2) ---------------------------------------
+    "Gabi": GuideRow(
+        "kg_ha",
+        om_bands=((2.0, 40), (3.5, 30), (4.5, 20), (5.5, 0), (float("inf"), 0)),
+        p_bands=((6.0, 60), (10.0, 40), (15.0, 20), (20.0, 10), (float("inf"), 0)),
+        k_bands=((35.0, 90), (55.0, 60), (250.0, 30), (300.0, 0), (float("inf"), 0)),
+    ),
+    "Potato": GuideRow(
+        "kg_ha",
+        om_bands=((2.0, 120), (3.5, 90), (4.5, 60), (5.5, 30), (float("inf"), 0)),
+        p_bands=((6.0, 100), (10.0, 80), (15.0, 60), (20.0, 30), (float("inf"), 0)),
+        k_bands=((35.0, 120), (55.0, 90), (250.0, 60), (300.0, 0), (float("inf"), 0)),
+    ),
+    # --- LEGUMES (guide page 2) -----------------------------------------
+    "Beans": GuideRow(
+        "kg_ha",
+        om_bands=((2.0, 10), (3.5, 0), (4.5, 0), (5.5, 0), (float("inf"), 0)),
+        p_bands=((6.0, 60), (10.0, 40), (15.0, 30), (20.0, 20), (float("inf"), 0)),
+        k_bands=((35.0, 60), (55.0, 45), (250.0, 30), (300.0, 0), (float("inf"), 0)),
+    ),
+    "Peas": GuideRow(
+        "kg_ha",
+        om_bands=((2.0, 20), (3.5, 10), (4.5, 0), (5.5, 0), (float("inf"), 0)),
+        p_bands=((6.0, 40), (10.0, 30), (15.0, 20), (20.0, 10), (float("inf"), 0)),
+        k_bands=((35.0, 45), (55.0, 30), (250.0, 15), (300.0, 0), (float("inf"), 0)),
+    ),
+    # --- INDUSTRIAL (guide page 2) --------------------------------------
+    "Sugarcane": GuideRow(
+        "kg_ha",
+        om_bands=((2.0, 180), (3.5, 130), (4.5, 100), (5.5, 75), (float("inf"), 0)),
+        p_bands=((6.0, 120), (10.0, 80), (15.0, 40), (20.0, 20), (float("inf"), 0)),
+        k_bands=((35.0, 160), (55.0, 130), (250.0, 100), (300.0, 60), (float("inf"), 0)),
+    ),
 }
 
 
@@ -401,6 +467,15 @@ CROP_ALIASES: dict[str, str] = {
     "Carrots": "Radish",
     "Upo": "Squash",
     "Patola": "Squash",
+    "Chili Pepper": "Garlic",
+    "Ube": "Gabi",
+    "Yam": "Gabi",
+    "Taro": "Gabi",
+    "Singkamas": "Potato",
+    "Lima": "Beans",
+    "Sitao": "Beans",
+    "Tapilan": "Peas",
+    "Cowpea": "Peas",
 }
 
 
@@ -420,6 +495,8 @@ CROPS: list[str] = CANONICAL_CROPS + sorted(CROP_ALIASES)
 # variety maps to Native.
 DEFAULT_VARIETY_ROW: dict[str, str] = {
     "Corn": "Native",
+    "Ginger": "Improved",
+    "Onion": "Bulb",
 }
 
 
