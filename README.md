@@ -203,6 +203,28 @@ for `kg_ha` crops (a per-tree rate needs a tree count, which this API doesn't co
 
 Returns `{status, model_version, artifacts_loaded, supabase_reachable}`.
 
+### Retraining pipeline
+
+All of these require `X-API-Key` when `ML_API_KEY` is set, and are driven by
+`suri`'s admin dashboard rather than called by hand:
+
+| Endpoint | Purpose |
+|---|---|
+| `POST /training-data/validate` | Multipart upload; parses and validates a CSV/XLSX against the template, returns accepted rows (with the values the service derived) and rejected rows with reasons. Writes nothing. |
+| `POST /training-data/commit` | Re-validates the raw rows and upserts what passes into `ml_soil_training_data`. |
+| `POST /retrain` | Starts a background retrain; returns `{job_id}`. 409 if one is already running. |
+| `GET /retrain/{job_id}` | `running` / `done` / `failed`, plus metrics and a comparison against the live model once done. |
+| `GET /model/versions` | Every registered version, which one is live, and which are on local disk. |
+| `POST /model/promote` | Hot-swaps the live model to `{version}` (restoring it from Supabase Storage first if it isn't on disk). Rollback is the same call with an older version. |
+
+Upload template columns — raw measurements only, everything else is derived
+server-side:
+
+`laboratory_code`, `crop`, `ph`, `organic_matter_pct`, `phosphorus_ppm`,
+`potassium_cmol_kg` (all required), plus optional `variety`,
+`cultivation_method`, `age_band`, `farm_area_sqm`, `sampling_site`,
+`date_of_sampling`.
+
 ## Tests
 
 ```bash

@@ -11,6 +11,12 @@ Type=simple
 User=ubuntu
 WorkingDirectory=/opt/suri-ml-backend
 EnvironmentFile=/opt/suri-ml-backend/.env
+# Exactly one worker, deliberately. The admin retraining pipeline promotes a
+# new model by hot-swapping it in this process's memory
+# (ml/model_state.py). Adding --workers N (N>1) would give each worker its
+# own copy, so a promotion would update one of them and leave the rest
+# serving the old model with no way to tell which answered a given request.
+# Retrain job state (ml/retrain_job.py) is per-process for the same reason.
 ExecStart=/opt/suri-ml-backend/.venv/bin/uvicorn main:app --host 0.0.0.0 --port 8001
 Restart=always
 RestartSec=3
