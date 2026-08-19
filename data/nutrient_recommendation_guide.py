@@ -11,9 +11,45 @@ ascending list of (upper_bound, rate) pairs using the same
 the official guide; pH still gets its own qualitative remark elsewhere but
 no longer numerically adjusts any rate here.
 
-TRANSCRIPTION STATUS: manually cross-checked cell-by-cell against
-suri/public/Nutrient Recommendation Guide.pdf (Task 1 of the implementation
-plan, docs/superpowers/plans/2026-08-05-real-soil-data-retraining.md).
+TRANSCRIPTION STATUS: the 35 canonical crops in this file were NOT all
+verified the same way. Three tiers, strongest first -- know which one a row
+belongs to before trusting or "correcting" its numbers.
+
+  Tier 1 -- manual cell-by-cell re-check against the PDF. The original nine
+  crops: Rice, Corn, Cassava, Peanut, Tomato, Mango, Cacao, Coconut, Banana.
+  Every cell was read off suri/public/Nutrient Recommendation Guide.pdf by
+  hand (Task 1 of docs/superpowers/plans/2026-08-05-real-soil-data-retraining.md);
+  that pass found and fixed the four transcription errors and the two
+  non-collapsible P columns detailed further down this docstring.
+
+  Tier 2 -- two independent transcriptions, agreeing. The 21 crops added in
+  Phase 1 of the crop-coverage expansion: Alugbati, Ampalaya, Asparagus,
+  Beans, Cabbage, Cauliflower, Celery, Chayote, Cucumber, Eggplant, Gabi,
+  Garlic, Ginger, Lettuce, Onion, Peas, Potato, Radish, Squash, Strawberry,
+  Sugarcane. Each cell was transcribed twice from the source -- once into
+  Nutrient Recommendation Guide.md and once for the expansion plan -- and the
+  two passes agree exactly, including the cells the first pass had flagged as
+  uncertain. Short of a DA-issued digital copy this is the strongest
+  verification available, so no separate per-cell PDF re-check was required.
+  (The aliases registered alongside them, e.g. Sorghum sharing Corn's printed
+  row, add no new numbers and inherit their canonical crop's tier.)
+
+  Tier 3 -- transcribed, plus documented inference where the source is
+  defective. The 5 tree/plantation crops added in Phase 2: Pineapple,
+  Avocado, Citrus, Guava, Lanzones. Most cells are straight transcriptions,
+  but a few could not be read off the page as printed and were reconstructed:
+  Guava's third age row repeats the label "4-6 yrs" and is encoded here as
+  "7 yrs & up", and four Citrus cells across the 5 / 6-10 / 11-15 yrs rows
+  are missing their decimal point in the source (.03 -> .30, 15 -> .15,
+  45 -> .45, 40 -> .40). Every such inference carries an inline comment at
+  the value it affects. Papaya was deliberately NOT added: its 1-2 yrs K row
+  is non-monotonic in the source and could not be confirmed, and guessing a
+  potassium rate a farmer would actually apply was judged unacceptable.
+  Also note that kg_ha vs kg_tree is itself an inference for all tree rows --
+  the guide prints units in only two places.
+
+Full detail on the Phase 1/2 work, including the source-anomaly table and the
+Papaya decision: docs/superpowers/plans/2026-08-18-crop-coverage-expansion.md.
 
 The source table's "Available P" columns are dual-labeled: the same 6
 physical columns carry both a Bray#1 range label (0-2.0, 2.1-6.0, 6.1-10.0,
