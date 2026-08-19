@@ -435,3 +435,98 @@ class TestFreeSpeciesAliases:
 
         for alias in ["Santol", "Caimito", "Durian", "Marang"]:
             assert target_unit_for_crop(alias) == "kg_tree"
+
+
+class TestPhase2TreeAndPlantationCrops:
+    """Age-banded tree crops plus Pineapple's Planted/Ratoon cycle axis.
+    Every expectation reads the lowest band of each class (poorest soil), so
+    a transposed column would fail loudly."""
+
+    @pytest.mark.parametrize("crop,expected", [
+        ("Pineapple", (300, 80, 180)),
+        ("Avocado", (0.3, 0.3, 0.6)),
+        ("Citrus", (0.5, 0.5, 0.75)),
+        ("Guava", (0.05, 0.3, 0.6)),
+        ("Lanzones", (0.4, 0.8, 1.2)),
+    ])
+    def test_poorest_soil_at_the_default_stage(self, crop, expected):
+        from data.nutrient_recommendation_guide import K_CMOL_TO_PPM, nutrient_requirements
+
+        assert nutrient_requirements(crop, 1.0, 3.0, 20.0 / K_CMOL_TO_PPM) == expected
+
+    def test_pineapple_ratoon_is_a_separate_row(self):
+        from data.nutrient_recommendation_guide import K_CMOL_TO_PPM, nutrient_requirements
+
+        k = 20.0 / K_CMOL_TO_PPM
+        assert nutrient_requirements("Pineapple", 1.0, 3.0, k, variety="Ratoon") == (150, 40, 120)
+
+    def test_pineapple_defaults_to_the_planted_row(self):
+        from data.nutrient_recommendation_guide import K_CMOL_TO_PPM, nutrient_requirements
+
+        k = 20.0 / K_CMOL_TO_PPM
+        assert nutrient_requirements("Pineapple", 1.0, 3.0, k) == \
+               nutrient_requirements("Pineapple", 1.0, 3.0, k, variety="Planted")
+
+    def test_pineapple_is_the_only_per_hectare_crop_added_here(self):
+        from data.nutrient_recommendation_guide import target_unit_for_crop
+
+        assert target_unit_for_crop("Pineapple") == "kg_ha"
+        for crop in ["Avocado", "Citrus", "Guava", "Lanzones"]:
+            assert target_unit_for_crop(crop) == "kg_tree"
+
+    @pytest.mark.parametrize("crop,age_band,expected", [
+        ("Avocado", "NT", (0.01, 0.01, 0.015)),
+        ("Avocado", "1-3 yrs", (0.1, 0.1, 0.3)),
+        ("Lanzones", "NT", (0.01, 0.02, 0.08)),
+        ("Guava", "1-3 yrs", (0.02, 0.1, 0.3)),
+        ("Citrus", "NT", (0.01, 0.01, 0.015)),
+    ])
+    def test_explicit_age_bands(self, crop, age_band, expected):
+        from data.nutrient_recommendation_guide import K_CMOL_TO_PPM, nutrient_requirements
+
+        assert nutrient_requirements(
+            crop, 1.0, 3.0, 20.0 / K_CMOL_TO_PPM, age_band=age_band
+        ) == expected
+
+    def test_citrus_five_year_row_uses_the_restored_decimals(self):
+        """The source prints K 0-35 as '.03' and K 36-55 as '15'; both are
+        missing decimal points. Restoring them keeps the row monotonic and
+        continues the 4yrs -> 6-10yrs progression."""
+        from data.nutrient_recommendation_guide import K_CMOL_TO_PPM, nutrient_requirements
+
+        assert nutrient_requirements(
+            "Citrus", 1.0, 3.0, 20.0 / K_CMOL_TO_PPM, age_band="5 yrs"
+        ) == (0.15, 0.2, 0.3)
+        assert nutrient_requirements(
+            "Citrus", 1.0, 3.0, 45.0 / K_CMOL_TO_PPM, age_band="5 yrs"
+        ) == (0.15, 0.2, 0.15)
+
+    def test_guava_third_row_is_registered_as_seven_years_and_up(self):
+        from data.nutrient_recommendation_guide import GUIDE_ROWS
+
+        assert "Guava|7 yrs & up" in GUIDE_ROWS
+        assert "Guava|4-6 yrs" in GUIDE_ROWS
+
+    @pytest.mark.parametrize("alias,canonical", [
+        ("Guyabano", "Avocado"), ("Atis", "Avocado"), ("Chico", "Avocado"),
+        ("Jackfruit", "Avocado"), ("Cashew", "Avocado"),
+        ("Calamansi", "Citrus"), ("Lime", "Citrus"), ("Orange", "Citrus"),
+        ("Passion Fruit", "Citrus"),
+        ("Rambutan", "Lanzones"), ("Mangosteen", "Lanzones"),
+    ])
+    def test_co_listed_species_alias_to_their_row(self, alias, canonical):
+        from data.nutrient_recommendation_guide import resolve_crop
+
+        assert resolve_crop(alias) == canonical
+
+    def test_every_age_banded_crop_has_a_bearing_default(self):
+        """resolve_age_band() falls back to BEARING_AGE_BAND when the caller
+        omits age_band; a crop with age rows but no entry there would key to
+        'None' and raise KeyError on every request."""
+        from data.nutrient_recommendation_guide import BEARING_AGE_BAND, GUIDE_ROWS
+
+        for crop in ["Papaya", "Avocado", "Citrus", "Guava", "Lanzones"]:
+            if not any(key.startswith(f"{crop}|") for key in GUIDE_ROWS):
+                continue  # Papaya may have been omitted -- see Step 0
+            assert crop in BEARING_AGE_BAND
+            assert f"{crop}|{BEARING_AGE_BAND[crop]}" in GUIDE_ROWS

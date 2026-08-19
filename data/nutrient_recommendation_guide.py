@@ -100,6 +100,8 @@ def _band_value(value: float, bands: tuple[tuple[float, float], ...]) -> float:
 # a request passes the "bearing" alias (or omits age_band entirely).
 BEARING_AGE_BAND: dict[str, str] = {
     "Coconut": "9yrs & up", "Cacao": "Over 7yrs", "Mango": "10yrs & up",
+    "Avocado": "7 yrs & up", "Citrus": "15 yrs & up",
+    "Guava": "7 yrs & up", "Lanzones": "7 yrs & up",
 }
 
 RICE_CULTIVATION_METHODS = ("Upland", "Lowland Wet", "Lowland Dry")
@@ -113,6 +115,7 @@ VARIETIES_BY_CROP: dict[str, tuple[str, ...]] = {
     "Corn": ("OPV", "Hybrid"),
     "Ginger": ("Improved", "Local"),
     "Onion": ("Bulb", "Spring"),
+    "Pineapple": ("Planted", "Ratoon"),
 }
 
 # Guide row key -> GuideRow. Keys: bare crop name for crops the guide
@@ -424,6 +427,150 @@ GUIDE_ROWS: dict[str, GuideRow] = {
         p_bands=((6.0, 120), (10.0, 80), (15.0, 40), (20.0, 20), (float("inf"), 0)),
         k_bands=((35.0, 160), (55.0, 130), (250.0, 100), (300.0, 60), (float("inf"), 0)),
     ),
+    # --- PLANTATION / FRUIT TREES (guide pages 2-3) ---------------------
+    # Pineapple's Planted/Ratoon is a crop-cycle axis, carried on the
+    # variety field (same mechanism as Ginger's Improved/Local).
+    "Pineapple|Planted": GuideRow(
+        "kg_ha",
+        om_bands=((2.0, 300), (3.5, 200), (4.5, 100), (5.5, 80), (float("inf"), 0)),
+        p_bands=((6.0, 80), (10.0, 60), (15.0, 40), (20.0, 20), (float("inf"), 0)),
+        k_bands=((35.0, 180), (55.0, 120), (250.0, 60), (300.0, 30), (float("inf"), 0)),
+    ),
+    "Pineapple|Ratoon": GuideRow(
+        "kg_ha",
+        om_bands=((2.0, 150), (3.5, 120), (4.5, 80), (5.5, 50), (float("inf"), 0)),
+        p_bands=((6.0, 40), (10.0, 30), (15.0, 20), (20.0, 10), (float("inf"), 0)),
+        k_bands=((35.0, 120), (55.0, 75), (250.0, 45), (300.0, 30), (float("inf"), 0)),
+    ),
+    "Avocado|NT": GuideRow(
+        "kg_tree",
+        om_bands=((2.0, 0.01), (3.5, 0.01), (4.5, 0.01), (5.5, 0), (float("inf"), 0)),
+        p_bands=((6.0, 0.01), (10.0, 0.01), (15.0, 0.01), (20.0, 0.01), (float("inf"), 0)),
+        k_bands=((35.0, 0.015), (55.0, 0.015), (250.0, 0.015), (300.0, 0), (float("inf"), 0)),
+    ),
+    "Avocado|1-3 yrs": GuideRow(
+        "kg_tree",
+        om_bands=((2.0, 0.10), (3.5, 0.05), (4.5, 0.03), (5.5, 0), (float("inf"), 0)),
+        p_bands=((6.0, 0.10), (10.0, 0.05), (15.0, 0.03), (20.0, 0.01), (float("inf"), 0)),
+        k_bands=((35.0, 0.30), (55.0, 0.15), (250.0, 0.05), (300.0, 0), (float("inf"), 0)),
+    ),
+    "Avocado|4-6 yrs": GuideRow(
+        "kg_tree",
+        om_bands=((2.0, 0.20), (3.5, 0.10), (4.5, 0.06), (5.5, 0), (float("inf"), 0)),
+        p_bands=((6.0, 0.20), (10.0, 0.10), (15.0, 0.08), (20.0, 0.05), (float("inf"), 0)),
+        k_bands=((35.0, 0.45), (55.0, 0.30), (250.0, 0.15), (300.0, 0), (float("inf"), 0)),
+    ),
+    "Avocado|7 yrs & up": GuideRow(
+        "kg_tree",
+        om_bands=((2.0, 0.30), (3.5, 0.20), (4.5, 0.10), (5.5, 0), (float("inf"), 0)),
+        p_bands=((6.0, 0.30), (10.0, 0.20), (15.0, 0.15), (20.0, 0.10), (float("inf"), 0)),
+        k_bands=((35.0, 0.60), (55.0, 0.45), (250.0, 0.30), (300.0, 0), (float("inf"), 0)),
+    ),
+    "Citrus|NT": GuideRow(
+        "kg_tree",
+        om_bands=((2.0, 0.01), (3.5, 0.01), (4.5, 0.005), (5.5, 0), (float("inf"), 0)),
+        p_bands=((6.0, 0.01), (10.0, 0.01), (15.0, 0.008), (20.0, 0.005), (float("inf"), 0)),
+        k_bands=((35.0, 0.015), (55.0, 0.009), (250.0, 0.003), (300.0, 0), (float("inf"), 0)),
+    ),
+    "Citrus|1 yr": GuideRow(
+        "kg_tree",
+        om_bands=((2.0, 0.04), (3.5, 0.02), (4.5, 0.008), (5.5, 0), (float("inf"), 0)),
+        p_bands=((6.0, 0.04), (10.0, 0.02), (15.0, 0.01), (20.0, 0.008), (float("inf"), 0)),
+        k_bands=((35.0, 0.03), (55.0, 0.015), (250.0, 0.015), (300.0, 0), (float("inf"), 0)),
+    ),
+    "Citrus|2 yrs": GuideRow(
+        "kg_tree",
+        om_bands=((2.0, 0.05), (3.5, 0.03), (4.5, 0.01), (5.5, 0), (float("inf"), 0)),
+        p_bands=((6.0, 0.05), (10.0, 0.03), (15.0, 0.015), (20.0, 0.010), (float("inf"), 0)),
+        k_bands=((35.0, 0.06), (55.0, 0.03), (250.0, 0.009), (300.0, 0), (float("inf"), 0)),
+    ),
+    "Citrus|3 yrs": GuideRow(
+        "kg_tree",
+        om_bands=((2.0, 0.075), (3.5, 0.04), (4.5, 0.015), (5.5, 0), (float("inf"), 0)),
+        p_bands=((6.0, 0.075), (10.0, 0.04), (15.0, 0.02), (20.0, 0.015), (float("inf"), 0)),
+        k_bands=((35.0, 0.09), (55.0, 0.06), (250.0, 0.015), (300.0, 0), (float("inf"), 0)),
+    ),
+    "Citrus|4 yrs": GuideRow(
+        "kg_tree",
+        om_bands=((2.0, 0.10), (3.5, 0.06), (4.5, 0.02), (5.5, 0), (float("inf"), 0)),
+        p_bands=((6.0, 0.10), (10.0, 0.05), (15.0, 0.03), (20.0, 0.02), (float("inf"), 0)),
+        k_bands=((35.0, 0.15), (55.0, 0.09), (250.0, 0.03), (300.0, 0), (float("inf"), 0)),
+    ),
+    "Citrus|5 yrs": GuideRow(
+        "kg_tree",
+        om_bands=((2.0, 0.15), (3.5, 0.10), (4.5, 0.03), (5.5, 0), (float("inf"), 0)),
+        p_bands=((6.0, 0.20), (10.0, 0.10), (15.0, 0.05), (20.0, 0.03), (float("inf"), 0)),
+        # Decimal points RESTORED: the source prints '.03' and '15' for the
+        # first two K classes. Both are missing a decimal -- .30/.15/.06 keeps
+        # the row monotonic and continues the 4yrs (.15/.09/.03) to 6-10yrs
+        # (.45/.30/.09) progression.
+        k_bands=((35.0, 0.30), (55.0, 0.15), (250.0, 0.06), (300.0, 0), (float("inf"), 0)),
+    ),
+    "Citrus|6-10 yrs": GuideRow(
+        "kg_tree",
+        om_bands=((2.0, 0.30), (3.5, 0.20), (4.5, 0.05), (5.5, 0), (float("inf"), 0)),
+        p_bands=((6.0, 0.30), (10.0, 0.20), (15.0, 0.10), (20.0, 0.05), (float("inf"), 0)),
+        # Decimal point RESTORED: source prints '45' for K 0-35.
+        k_bands=((35.0, 0.45), (55.0, 0.30), (250.0, 0.09), (300.0, 0), (float("inf"), 0)),
+    ),
+    "Citrus|11-15 yrs": GuideRow(
+        "kg_tree",
+        om_bands=((2.0, 0.40), (3.5, 0.30), (4.5, 0.10), (5.5, 0), (float("inf"), 0)),
+        # Decimal point RESTORED: source prints '40' for P 0-6.0.
+        p_bands=((6.0, 0.40), (10.0, 0.30), (15.0, 0.20), (20.0, 0.10), (float("inf"), 0)),
+        k_bands=((35.0, 0.60), (55.0, 0.45), (250.0, 0.15), (300.0, 0), (float("inf"), 0)),
+    ),
+    "Citrus|15 yrs & up": GuideRow(
+        "kg_tree",
+        om_bands=((2.0, 0.50), (3.5, 0.40), (4.5, 0.20), (5.5, 0), (float("inf"), 0)),
+        p_bands=((6.0, 0.50), (10.0, 0.40), (15.0, 0.30), (20.0, 0.20), (float("inf"), 0)),
+        k_bands=((35.0, 0.75), (55.0, 0.60), (250.0, 0.30), (300.0, 0), (float("inf"), 0)),
+    ),
+    "Guava|1-3 yrs": GuideRow(
+        "kg_tree",
+        om_bands=((2.0, 0.02), (3.5, 0.01), (4.5, 0.005), (5.5, 0), (float("inf"), 0)),
+        p_bands=((6.0, 0.10), (10.0, 0.05), (15.0, 0.03), (20.0, 0.01), (float("inf"), 0)),
+        k_bands=((35.0, 0.30), (55.0, 0.15), (250.0, 0.05), (300.0, 0), (float("inf"), 0)),
+    ),
+    "Guava|4-6 yrs": GuideRow(
+        "kg_tree",
+        om_bands=((2.0, 0.04), (3.5, 0.02), (4.5, 0.01), (5.5, 0), (float("inf"), 0)),
+        p_bands=((6.0, 0.20), (10.0, 0.10), (15.0, 0.08), (20.0, 0.05), (float("inf"), 0)),
+        k_bands=((35.0, 0.45), (55.0, 0.30), (250.0, 0.15), (300.0, 0), (float("inf"), 0)),
+    ),
+    # Label INFERRED: the guide prints '4-6 yrs' twice. These values ascend
+    # from the row above and match the Avocado group's '7 yrs & up' row
+    # exactly, so this is that band.
+    "Guava|7 yrs & up": GuideRow(
+        "kg_tree",
+        om_bands=((2.0, 0.05), (3.5, 0.03), (4.5, 0.02), (5.5, 0), (float("inf"), 0)),
+        p_bands=((6.0, 0.30), (10.0, 0.20), (15.0, 0.15), (20.0, 0.10), (float("inf"), 0)),
+        k_bands=((35.0, 0.60), (55.0, 0.45), (250.0, 0.30), (300.0, 0), (float("inf"), 0)),
+    ),
+    "Lanzones|NT": GuideRow(
+        "kg_tree",
+        om_bands=((2.0, 0.01), (3.5, 0.01), (4.5, 0.01), (5.5, 0), (float("inf"), 0)),
+        p_bands=((6.0, 0.02), (10.0, 0.02), (15.0, 0.02), (20.0, 0.01), (float("inf"), 0)),
+        k_bands=((35.0, 0.08), (55.0, 0.05), (250.0, 0.03), (300.0, 0), (float("inf"), 0)),
+    ),
+    "Lanzones|1-3 yrs": GuideRow(
+        "kg_tree",
+        om_bands=((2.0, 0.10), (3.5, 0.05), (4.5, 0.03), (5.5, 0), (float("inf"), 0)),
+        p_bands=((6.0, 0.20), (10.0, 0.10), (15.0, 0.05), (20.0, 0.03), (float("inf"), 0)),
+        k_bands=((35.0, 0.30), (55.0, 0.15), (250.0, 0.09), (300.0, 0), (float("inf"), 0)),
+    ),
+    "Lanzones|4-6 yrs": GuideRow(
+        "kg_tree",
+        om_bands=((2.0, 0.20), (3.5, 0.10), (4.5, 0.05), (5.5, 0), (float("inf"), 0)),
+        p_bands=((6.0, 0.40), (10.0, 0.30), (15.0, 0.20), (20.0, 0.10), (float("inf"), 0)),
+        k_bands=((35.0, 0.90), (55.0, 0.60), (250.0, 0.30), (300.0, 0), (float("inf"), 0)),
+    ),
+    "Lanzones|7 yrs & up": GuideRow(
+        "kg_tree",
+        om_bands=((2.0, 0.40), (3.5, 0.30), (4.5, 0.20), (5.5, 0), (float("inf"), 0)),
+        p_bands=((6.0, 0.80), (10.0, 0.60), (15.0, 0.40), (20.0, 0.20), (float("inf"), 0)),
+        k_bands=((35.0, 1.2), (55.0, 0.90), (250.0, 0.60), (300.0, 0), (float("inf"), 0)),
+    ),
 }
 
 
@@ -486,6 +633,23 @@ CROP_ALIASES: dict[str, str] = {
     "Caimito": "Mango",
     "Durian": "Mango",
     "Marang": "Mango",
+    # Fruit-tree groups: every species below shares its canonical crop's row.
+    "Chico": "Avocado",
+    "Atis": "Avocado",
+    "Guyabano": "Avocado",
+    "Apple": "Avocado",
+    "Cashew": "Avocado",
+    "Jackfruit": "Avocado",
+    "Macopa": "Avocado",
+    "Tambis": "Avocado",
+    "Balimbing": "Avocado",
+    "Lime": "Citrus",
+    "Lemon": "Citrus",
+    "Orange": "Citrus",
+    "Calamansi": "Citrus",
+    "Passion Fruit": "Citrus",
+    "Rambutan": "Lanzones",
+    "Mangosteen": "Lanzones",
 }
 
 
@@ -507,6 +671,7 @@ DEFAULT_VARIETY_ROW: dict[str, str] = {
     "Corn": "Native",
     "Ginger": "Improved",
     "Onion": "Bulb",
+    "Pineapple": "Planted",
 }
 
 
