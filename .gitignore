@@ -7,8 +7,11 @@ __pycache__/
 .pytest_cache/
 *.egg-info/
 
-# Generated data — reproducible from the seeded generator, not committed
+# Generated data — reproducible from the seeded generator, not committed.
+# Test fixtures are exempt: they're small, hand-written, and part of the
+# suite's meaning, so a blanket *.csv would silently drop them.
 *.csv
+!tests/fixtures/*.csv
 
 # Trained model artifacts — reproducible via ml/train.py, EXCEPT the one
 # version pinned below: main.py loads the latest artifact directory at
