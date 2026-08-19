@@ -62,57 +62,86 @@ APPLICATION_SCHEDULE: dict[str, str] = {
         "pseudostem, in a ring or band; on slopes, fork the fertilizer in "
         "on the uphill side of the plant."
     ),
-    "Alugbati": (
-        "Apply half of the N plus all P and K at planting. Sidedress the "
-        "remaining N at vine development stage."
-    ),
     "Ampalaya": (
-        "Apply half of the N plus all P and K at planting. Sidedress the "
-        "remaining N when plants start flowering."
+        "Mix half of the recommended fertilizer with the soil at planting "
+        "time. Sidedress with the remaining fertilizer when the first set "
+        "of fruits begin to form."
     ),
     "Asparagus": (
-        "Apply all P and K plus half of the N at planting. Sidedress the "
-        "remaining N when spears reach 6-8 inches in height."
+        "Broadcast the fertilizer before planting and work it into a depth "
+        "of about 7.5cm. During the cutting season, scatter nitrogen "
+        "fertilizer along the rows at intervals of about 14 days."
     ),
     "Cabbage": (
-        "Apply half of the N plus all P and K at transplanting. Sidedress "
-        "the remaining N when plants develop 4-6 leaves."
+        "Apply the fertilizer including half the nitrogen as a double band "
+        "10-12.5cm on both sides of the row, 10cm deep, at planting. "
+        "Sidedress with the remaining nitrogen fertilizer 10-14 days after "
+        "planting; part of this may also be applied 2 weeks before harvest."
     ),
     "Cauliflower": (
-        "Apply half of the N plus all P and K at transplanting. Sidedress "
-        "the remaining N when curds begin to form."
+        # Source lists this jointly as "Brocolli/Cauliflower" -- same text
+        # applies to both; Broccoli is not yet a canonical crop here.
+        "Apply the fertilizer including half of the nitrogen in a double "
+        "band 10-12.5cm on each side of the row, 10cm deep, at planting. "
+        "Topdress with the remaining nitrogen fertilizer 10-14 days after "
+        "planting."
     ),
     "Celery": (
-        "Apply half of the N plus all P and K at transplanting. Sidedress "
-        "the remaining N when plants reach half their mature height."
+        # Source lists this jointly as "Celery/Turnip(Singkamas)" and gives
+        # a range, not a single fraction -- transcribed as printed.
+        "One-half to two-thirds of the recommended fertilizer is broadcast "
+        "and plowed into the soil during land preparation. Sidedress with "
+        "the remaining fertilizer during the vegetative period."
     ),
     "Chayote": (
-        "Apply all P and K plus half of the N at planting. Sidedress the "
-        "remaining N when vines reach 2-3 meters in length."
+        "Mix the fertilizer including two-thirds of the nitrogen with the "
+        "soil at planting time. Sidedress with the remaining nitrogen "
+        "fertilizer when fruits begin to form."
     ),
     "Cucumber": (
-        "Apply half of the N plus all P and K at planting. Sidedress the "
-        "remaining N when plants start flowering."
+        "Broadcast or apply the fertilizer including two-thirds of the "
+        "nitrogen in a band 3-4 inches to the side of the row, 2 inches "
+        "deeper than the seed, before sowing. Topdress with the remaining "
+        "nitrogen fertilizer when the first fruits are half formed."
     ),
     "Eggplant": (
-        "Apply half of the N plus all P and K at transplanting. Sidedress "
-        "the remaining N when first flowers appear."
+        "Apply all P and K fertilizer including half of the nitrogen into "
+        "the furrows at transplanting time. Sidedress with a quarter of "
+        "the nitrogen fertilizer about a month after transplanting. A "
+        "second sidedressing with the remaining quarter of nitrogen is "
+        "made immediately after the 2nd picking of marketable fruits."
     ),
     "Lettuce": (
-        "Apply all N, P, and K at planting or transplanting, incorporated "
-        "into the soil before seeding or planting."
+        # Source lists this jointly as "Leafy vegetable (Lettuce/Mustard/
+        # Pechay)" -- Mustard and Pechay are not yet canonical crops here.
+        "Sensitive to heavy application of nitrogen. Apply one-third of "
+        "the nitrogen fertilizer with the potash and phosphate at "
+        "planting. Sidedress the remaining two-thirds of nitrogen in two "
+        "equal doses, at 14 days and at 30 days after planting."
     ),
     "Radish": (
-        "Apply all N, P, and K at planting, incorporated into the soil "
-        "before seeding."
+        "Broadcast the fertilizer including half the nitrogen and work it "
+        "into the soil 2-3 inches deep at seedling time. Topdress with "
+        "the remaining nitrogen fertilizer after seedlings have taken "
+        "root."
     ),
     "Squash": (
-        "Apply half of the N plus all P and K at planting. Sidedress the "
-        "remaining N when plants start flowering."
+        "Apply the fertilizer including half of the nitrogen at planting "
+        "time, mixing thoroughly with the soil. Sidedress with the "
+        "remaining nitrogen when fruits begin to form."
     ),
     "Strawberry": (
-        "Apply all P and K plus half of the N at planting. Sidedress the "
-        "remaining N when runners start to develop."
+        # Source has two entries mentioning strawberry: "Strawberry
+        # (similar to coffee)" (a perennial-tree schedule) and a specific
+        # "Muskmelon/Strawberry" entry with field-crop timing. This
+        # GUIDE_ROWS entry treats Strawberry as kg_ha (an annual field
+        # crop), so the Muskmelon/Strawberry entry is the applicable one --
+        # used here, not the coffee cross-reference.
+        "Apply the fertilizer including half of the nitrogen in the form "
+        "of a broad band beneath the seed row at the preparation of the "
+        "seedbed. Topdress with the remaining nitrogen fertilizer when "
+        "the first fruits are half grown. This may be repeated once more "
+        "or two weeks before harvest."
     ),
 }
 
