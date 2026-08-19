@@ -26,7 +26,7 @@ class TestNutrientRequirements:
 
     def test_unknown_crop_raises(self):
         with pytest.raises(KeyError):
-            nutrient_requirements("Durian", om=2.5, p_ppm=15.0, k_cmol_kg=0.3)
+            nutrient_requirements("Nonesuch", om=2.5, p_ppm=15.0, k_cmol_kg=0.3)
 
     def test_variety_with_no_matching_row_falls_back_gracefully(self):
         """Cassava has no variety-specific guide rows — passing one must not

@@ -8,7 +8,7 @@ class TestApplicationScheduleForCrop:
         assert isinstance(text, str) and len(text) > 0
 
     def test_unknown_crop_returns_none(self):
-        assert application_schedule_for_crop("Durian") is None
+        assert application_schedule_for_crop("Nonesuch") is None
 
     def test_covered_crops_have_an_entry(self):
         """These crops are confirmed covered by MODE OF APPLICATION.pdf,

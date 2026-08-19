@@ -275,7 +275,7 @@ class TestValidation:
         assert client.post("/predict", json={"crop": "Corn"}).status_code == 422
 
     def test_unknown_crop_is_rejected_with_the_valid_list(self, client):
-        response = client.post("/predict", json={**SAMPLE_PAYLOAD, "crop": "Durian"})
+        response = client.post("/predict", json={**SAMPLE_PAYLOAD, "crop": "Nonesuch"})
         assert response.status_code == 422
         assert "Corn" in response.text
 
