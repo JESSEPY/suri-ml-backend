@@ -62,8 +62,66 @@ APPLICATION_SCHEDULE: dict[str, str] = {
         "pseudostem, in a ring or band; on slopes, fork the fertilizer in "
         "on the uphill side of the plant."
     ),
+    "Alugbati": (
+        "Apply half of the N plus all P and K at planting. Sidedress the "
+        "remaining N at vine development stage."
+    ),
+    "Ampalaya": (
+        "Apply half of the N plus all P and K at planting. Sidedress the "
+        "remaining N when plants start flowering."
+    ),
+    "Asparagus": (
+        "Apply all P and K plus half of the N at planting. Sidedress the "
+        "remaining N when spears reach 6-8 inches in height."
+    ),
+    "Cabbage": (
+        "Apply half of the N plus all P and K at transplanting. Sidedress "
+        "the remaining N when plants develop 4-6 leaves."
+    ),
+    "Cauliflower": (
+        "Apply half of the N plus all P and K at transplanting. Sidedress "
+        "the remaining N when curds begin to form."
+    ),
+    "Celery": (
+        "Apply half of the N plus all P and K at transplanting. Sidedress "
+        "the remaining N when plants reach half their mature height."
+    ),
+    "Chayote": (
+        "Apply all P and K plus half of the N at planting. Sidedress the "
+        "remaining N when vines reach 2-3 meters in length."
+    ),
+    "Cucumber": (
+        "Apply half of the N plus all P and K at planting. Sidedress the "
+        "remaining N when plants start flowering."
+    ),
+    "Eggplant": (
+        "Apply half of the N plus all P and K at transplanting. Sidedress "
+        "the remaining N when first flowers appear."
+    ),
+    "Lettuce": (
+        "Apply all N, P, and K at planting or transplanting, incorporated "
+        "into the soil before seeding or planting."
+    ),
+    "Radish": (
+        "Apply all N, P, and K at planting, incorporated into the soil "
+        "before seeding."
+    ),
+    "Squash": (
+        "Apply half of the N plus all P and K at planting. Sidedress the "
+        "remaining N when plants start flowering."
+    ),
+    "Strawberry": (
+        "Apply all P and K plus half of the N at planting. Sidedress the "
+        "remaining N when runners start to develop."
+    ),
 }
 
 
 def application_schedule_for_crop(crop: str) -> str | None:
-    return APPLICATION_SCHEDULE.get(crop)
+    from data.nutrient_recommendation_guide import resolve_crop
+
+    try:
+        canonical = resolve_crop(crop)
+        return APPLICATION_SCHEDULE.get(canonical)
+    except KeyError:
+        return None

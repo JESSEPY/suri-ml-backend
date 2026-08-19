@@ -277,6 +277,87 @@ GUIDE_ROWS: dict[str, GuideRow] = {
         p_bands=((6.0, 0.05), (10.0, 0.045), (15.0, 0.04), (20.0, 0.035), (float("inf"), 0)),
         k_bands=((35.0, 0.33), (55.0, 0.23), (250.0, 0.13), (300.0, 0.08), (float("inf"), 0)),
     ),
+    # --- VEGETABLES (guide page 1) -------------------------------------
+    "Alugbati": GuideRow(
+        "kg_ha",
+        om_bands=((2.0, 90), (3.5, 60), (4.5, 45), (5.5, 30), (float("inf"), 0)),
+        p_bands=((6.0, 60), (10.0, 40), (15.0, 30), (20.0, 20), (float("inf"), 0)),
+        k_bands=((35.0, 60), (55.0, 45), (250.0, 30), (300.0, 0), (float("inf"), 0)),
+    ),
+    "Ampalaya": GuideRow(
+        "kg_ha",
+        om_bands=((2.0, 40), (3.5, 30), (4.5, 15), (5.5, 0), (float("inf"), 0)),
+        p_bands=((6.0, 80), (10.0, 60), (15.0, 40), (20.0, 20), (float("inf"), 0)),
+        k_bands=((35.0, 45), (55.0, 30), (250.0, 15), (300.0, 0), (float("inf"), 0)),
+    ),
+    "Asparagus": GuideRow(
+        "kg_ha",
+        om_bands=((2.0, 90), (3.5, 60), (4.5, 45), (5.5, 30), (float("inf"), 0)),
+        p_bands=((6.0, 40), (10.0, 30), (15.0, 20), (20.0, 10), (float("inf"), 0)),
+        k_bands=((35.0, 60), (55.0, 45), (250.0, 30), (300.0, 0), (float("inf"), 0)),
+    ),
+    "Cabbage": GuideRow(
+        "kg_ha",
+        om_bands=((2.0, 150), (3.5, 140), (4.5, 120), (5.5, 100), (float("inf"), 0)),
+        p_bands=((6.0, 80), (10.0, 60), (15.0, 40), (20.0, 20), (float("inf"), 0)),
+        k_bands=((35.0, 75), (55.0, 60), (250.0, 30), (300.0, 0), (float("inf"), 0)),
+    ),
+    "Cauliflower": GuideRow(
+        "kg_ha",
+        om_bands=((2.0, 90), (3.5, 60), (4.5, 30), (5.5, 0), (float("inf"), 0)),
+        p_bands=((6.0, 80), (10.0, 60), (15.0, 40), (20.0, 20), (float("inf"), 0)),
+        k_bands=((35.0, 90), (55.0, 60), (250.0, 30), (300.0, 0), (float("inf"), 0)),
+    ),
+    "Celery": GuideRow(
+        "kg_ha",
+        om_bands=((2.0, 60), (3.5, 50), (4.5, 40), (5.5, 30), (float("inf"), 0)),
+        p_bands=((6.0, 90), (10.0, 60), (15.0, 40), (20.0, 20), (float("inf"), 0)),
+        # Terminal K band is INFERRED as 0: the guide leaves Celery's >301
+        # cell blank, unlike every other vegetable row, which prints 0 there.
+        k_bands=((35.0, 60), (55.0, 45), (250.0, 30), (300.0, 0), (float("inf"), 0)),
+    ),
+    "Chayote": GuideRow(
+        "kg_ha",
+        om_bands=((2.0, 60), (3.5, 50), (4.5, 40), (5.5, 30), (float("inf"), 0)),
+        p_bands=((6.0, 80), (10.0, 60), (15.0, 40), (20.0, 20), (float("inf"), 0)),
+        k_bands=((35.0, 65), (55.0, 45), (250.0, 30), (300.0, 0), (float("inf"), 0)),
+    ),
+    "Cucumber": GuideRow(
+        "kg_ha",
+        om_bands=((2.0, 60), (3.5, 40), (4.5, 20), (5.5, 0), (float("inf"), 0)),
+        p_bands=((6.0, 100), (10.0, 75), (15.0, 50), (20.0, 25), (float("inf"), 0)),
+        k_bands=((35.0, 45), (55.0, 30), (250.0, 15), (300.0, 0), (float("inf"), 0)),
+    ),
+    "Eggplant": GuideRow(
+        "kg_ha",
+        om_bands=((2.0, 90), (3.5, 80), (4.5, 70), (5.5, 60), (float("inf"), 0)),
+        p_bands=((6.0, 80), (10.0, 60), (15.0, 30), (20.0, 10), (float("inf"), 0)),
+        k_bands=((35.0, 90), (55.0, 60), (250.0, 30), (300.0, 0), (float("inf"), 0)),
+    ),
+    "Lettuce": GuideRow(
+        "kg_ha",
+        om_bands=((2.0, 60), (3.5, 50), (4.5, 40), (5.5, 30), (float("inf"), 0)),
+        p_bands=((6.0, 60), (10.0, 40), (15.0, 30), (20.0, 20), (float("inf"), 0)),
+        k_bands=((35.0, 75), (55.0, 60), (250.0, 30), (300.0, 0), (float("inf"), 0)),
+    ),
+    "Radish": GuideRow(
+        "kg_ha",
+        om_bands=((2.0, 90), (3.5, 60), (4.5, 30), (5.5, 0), (float("inf"), 0)),
+        p_bands=((6.0, 90), (10.0, 60), (15.0, 40), (20.0, 20), (float("inf"), 0)),
+        k_bands=((35.0, 120), (55.0, 90), (250.0, 60), (300.0, 30), (float("inf"), 0)),
+    ),
+    "Squash": GuideRow(
+        "kg_ha",
+        om_bands=((2.0, 60), (3.5, 40), (4.5, 30), (5.5, 30), (float("inf"), 0)),
+        p_bands=((6.0, 80), (10.0, 60), (15.0, 40), (20.0, 20), (float("inf"), 0)),
+        k_bands=((35.0, 60), (55.0, 45), (250.0, 30), (300.0, 0), (float("inf"), 0)),
+    ),
+    "Strawberry": GuideRow(
+        "kg_ha",
+        om_bands=((2.0, 45), (3.5, 30), (4.5, 20), (5.5, 0), (float("inf"), 0)),
+        p_bands=((6.0, 30), (10.0, 20), (15.0, 20), (20.0, 10), (float("inf"), 0)),
+        k_bands=((35.0, 60), (55.0, 48), (250.0, 30), (300.0, 0), (float("inf"), 0)),
+    ),
 }
 
 
@@ -306,7 +387,21 @@ TARGET_UNIT: dict[str, str] = _derive_target_units(GUIDE_ROWS)
 # exact rates. Aliasing rather than duplicating keeps one row per set of
 # numbers, so the one-hot feature width tracks guide rows (not selectable
 # names) and a rate correction is still a single edit.
-CROP_ALIASES: dict[str, str] = {}
+CROP_ALIASES: dict[str, str] = {
+    # Species the guide prints on the same row as the canonical crop above.
+    "Kangkong": "Alugbati",
+    "Pechay": "Cabbage",
+    "Mustard": "Cabbage",
+    "Spinach": "Cabbage",
+    "Broccoli": "Cabbage",
+    "Muskmelon": "Cucumber",
+    "Watermelon": "Cucumber",
+    "Okra": "Eggplant",
+    "Malunggay": "Lettuce",
+    "Carrots": "Radish",
+    "Upo": "Squash",
+    "Patola": "Squash",
+}
 
 
 def resolve_crop(crop: str) -> str:

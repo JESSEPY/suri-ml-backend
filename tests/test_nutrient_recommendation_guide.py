@@ -323,3 +323,52 @@ class TestCropAliases:
         alias, canonical = next(iter(CROP_ALIASES.items()))
         assert nutrient_requirements(alias, 2.5, 15.0, 0.3) == \
                nutrient_requirements(canonical, 2.5, 15.0, 0.3)
+
+
+class TestVegetableRows:
+    """One assertion per band edge per crop. Values are the guide's own;
+    a failure here means either the transcription or the band arithmetic is
+    wrong, and both are worth failing loudly on."""
+
+    @pytest.mark.parametrize("crop,om,p,k,expected", [
+        # (crop, %OM, Olsen P ppm, K ppm, (N, P2O5, K2O))
+        ("Alugbati", 1.0, 3.0, 20.0, (90, 60, 60)),
+        ("Alugbati", 6.0, 35.0, 400.0, (0, 0, 0)),
+        ("Ampalaya", 1.0, 3.0, 20.0, (40, 80, 45)),
+        ("Asparagus", 3.0, 8.0, 45.0, (60, 30, 45)),
+        ("Cabbage", 1.0, 3.0, 20.0, (150, 80, 75)),
+        ("Cabbage", 5.0, 12.0, 100.0, (100, 40, 30)),
+        ("Cauliflower", 1.0, 3.0, 20.0, (90, 80, 90)),
+        ("Celery", 1.0, 3.0, 20.0, (60, 90, 60)),
+        ("Chayote", 1.0, 3.0, 20.0, (60, 80, 65)),
+        ("Cucumber", 1.0, 3.0, 20.0, (60, 100, 45)),
+        ("Eggplant", 1.0, 3.0, 20.0, (90, 80, 90)),
+        ("Lettuce", 1.0, 3.0, 20.0, (60, 60, 75)),
+        ("Radish", 1.0, 3.0, 20.0, (90, 90, 120)),
+        ("Radish", 3.0, 8.0, 280.0, (60, 60, 30)),
+        ("Squash", 1.0, 3.0, 20.0, (60, 80, 60)),
+        ("Strawberry", 1.0, 3.0, 20.0, (45, 30, 60)),
+    ])
+    def test_band_lookups(self, crop, om, p, k, expected):
+        from data.nutrient_recommendation_guide import K_CMOL_TO_PPM, nutrient_requirements
+
+        assert nutrient_requirements(crop, om, p, k / K_CMOL_TO_PPM) == expected
+
+    def test_all_vegetables_are_per_hectare(self):
+        from data.nutrient_recommendation_guide import target_unit_for_crop
+
+        for crop in ["Alugbati", "Ampalaya", "Asparagus", "Cabbage", "Cauliflower",
+                     "Celery", "Chayote", "Cucumber", "Eggplant", "Lettuce",
+                     "Radish", "Squash", "Strawberry"]:
+            assert target_unit_for_crop(crop) == "kg_ha"
+
+    @pytest.mark.parametrize("alias,canonical", [
+        ("Kangkong", "Alugbati"), ("Pechay", "Cabbage"), ("Mustard", "Cabbage"),
+        ("Spinach", "Cabbage"), ("Broccoli", "Cabbage"), ("Muskmelon", "Cucumber"),
+        ("Watermelon", "Cucumber"), ("Okra", "Eggplant"), ("Malunggay", "Lettuce"),
+        ("Carrots", "Radish"), ("Upo", "Squash"), ("Patola", "Squash"),
+    ])
+    def test_co_listed_species_alias_to_their_row(self, alias, canonical):
+        from data.nutrient_recommendation_guide import resolve_crop
+
+        assert resolve_crop(alias) == canonical
