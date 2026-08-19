@@ -96,15 +96,6 @@ def _band_value(value: float, bands: tuple[tuple[float, float], ...]) -> float:
     return bands[-1][1]
 
 
-CROPS: list[str] = [
-    "Corn", "Rice", "Cassava", "Peanut", "Mango", "Cacao", "Banana", "Tomato", "Coconut",
-]
-
-TARGET_UNIT: dict[str, str] = {
-    "Rice": "kg_ha", "Corn": "kg_ha", "Cassava": "kg_ha", "Peanut": "kg_ha", "Tomato": "kg_ha",
-    "Mango": "kg_tree", "Cacao": "kg_tree", "Coconut": "kg_tree", "Banana": "kg_tree",
-}
-
 # crop -> its guide row-label for the mature/fruit-bearing stage, used when
 # a request passes the "bearing" alias (or omits age_band entirely).
 BEARING_AGE_BAND: dict[str, str] = {
@@ -289,6 +280,39 @@ GUIDE_ROWS: dict[str, GuideRow] = {
 }
 
 
+def _derive_target_units(rows: dict[str, GuideRow]) -> dict[str, str]:
+    """Every row of one crop must agree on its unit -- a crop measured in
+    kg/ha by one row and kg/tree by another would make target_unit_for_crop()
+    depend on dict ordering."""
+    units: dict[str, str] = {}
+    for key, row in rows.items():
+        crop = key.split("|", 1)[0]
+        existing = units.setdefault(crop, row.unit)
+        if existing != row.unit:
+            raise ValueError(
+                f"Crop {crop!r} has rows with conflicting units: {existing} and {row.unit}"
+            )
+    return units
+
+
+# Derived from GUIDE_ROWS, never restated by hand: adding a crop means adding
+# its guide row(s) and nothing else. Sorted so the one-hot encoder's category
+# order is deterministic across processes.
+CANONICAL_CROPS: list[str] = sorted({key.split("|", 1)[0] for key in GUIDE_ROWS})
+
+TARGET_UNIT: dict[str, str] = _derive_target_units(GUIDE_ROWS)
+
+CROPS: list[str] = list(CANONICAL_CROPS)
+
+# For crops the guide splits on a non-age, non-cultivation axis, the row label
+# used when the caller supplies nothing (or something this crop doesn't have).
+# Corn is the existing case: its rows are Native/Hybrid, and an unset or "OPV"
+# variety maps to Native.
+DEFAULT_VARIETY_ROW: dict[str, str] = {
+    "Corn": "Native",
+}
+
+
 def max_total_need(
     crop: str, variety: str | None = None, cultivation_method: str | None = None,
     age_band: str | None = None,
@@ -345,9 +369,10 @@ def _guide_row_key(
 ) -> str:
     if crop == "Rice":
         return f"Rice|{resolve_cultivation_method(crop, cultivation_method)}"
-    if crop == "Corn":
-        resolved_variety = resolve_variety(crop, variety)
-        return f"Corn|{'Hybrid' if resolved_variety == 'Hybrid' else 'Native'}"
+    if crop in DEFAULT_VARIETY_ROW:
+        resolved = resolve_variety(crop, variety)
+        label = resolved if f"{crop}|{resolved}" in GUIDE_ROWS else DEFAULT_VARIETY_ROW[crop]
+        return f"{crop}|{label}"
     if crop in BEARING_AGE_BAND:
         return f"{crop}|{resolve_age_band(crop, age_band)}"
     if crop == "Banana":

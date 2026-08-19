@@ -207,3 +207,75 @@ class TestMaxTotalNeed:
         produce a need fraction > 1."""
         n, p, k = nutrient_requirements(crop, om=0.0, p_ppm=0.0, k_cmol_kg=0.0)
         assert n + p + k <= max_total_need(crop)
+
+
+class TestDerivedRegistry:
+    """The registry is derived from GUIDE_ROWS rather than restated by hand.
+    These pin the derivation to exactly today's values, so the refactor is
+    provably behaviour-preserving."""
+
+    def test_canonical_crops_match_the_guide_rows(self):
+        from data.nutrient_recommendation_guide import CANONICAL_CROPS, GUIDE_ROWS
+
+        expected = sorted({key.split("|", 1)[0] for key in GUIDE_ROWS})
+        assert CANONICAL_CROPS == expected
+
+    def test_the_nine_original_crops_are_all_present(self):
+        from data.nutrient_recommendation_guide import CROPS
+
+        for crop in ["Corn", "Rice", "Cassava", "Peanut", "Mango",
+                     "Cacao", "Banana", "Tomato", "Coconut"]:
+            assert crop in CROPS
+
+    def test_target_unit_is_derived_and_still_correct(self):
+        from data.nutrient_recommendation_guide import TARGET_UNIT
+
+        for crop in ["Rice", "Corn", "Cassava", "Peanut", "Tomato"]:
+            assert TARGET_UNIT[crop] == "kg_ha"
+        for crop in ["Mango", "Cacao", "Coconut", "Banana"]:
+            assert TARGET_UNIT[crop] == "kg_tree"
+
+    def test_every_crop_has_a_target_unit(self):
+        from data.nutrient_recommendation_guide import CANONICAL_CROPS, TARGET_UNIT
+
+        assert set(TARGET_UNIT) == set(CANONICAL_CROPS)
+
+    def test_a_crop_whose_rows_disagree_on_unit_is_rejected(self):
+        """A mixed-unit crop would make target_unit_for_crop() arbitrary."""
+        from data.nutrient_recommendation_guide import GuideRow, _derive_target_units
+
+        rows = {
+            "Bogus|A": GuideRow("kg_ha", ((2.0, 1),), ((6.0, 1),), ((35.0, 1),)),
+            "Bogus|B": GuideRow("kg_tree", ((2.0, 1),), ((6.0, 1),), ((35.0, 1),)),
+        }
+        with pytest.raises(ValueError, match="Bogus"):
+            _derive_target_units(rows)
+
+
+class TestGuideRowKeyGeneralization:
+    """Corn's Native/Hybrid split is a variety axis, same shape as the
+    sub-axes new crops need. Pinning it here guards the generalization."""
+
+    def test_corn_defaults_to_the_native_row(self):
+        from data.nutrient_recommendation_guide import _guide_row_key
+
+        assert _guide_row_key("Corn", None, None, None) == "Corn|Native"
+        assert _guide_row_key("Corn", "OPV", None, None) == "Corn|Native"
+        assert _guide_row_key("Corn", "Hybrid", None, None) == "Corn|Hybrid"
+
+    def test_rice_still_keys_on_cultivation_method(self):
+        from data.nutrient_recommendation_guide import _guide_row_key
+
+        assert _guide_row_key("Rice", None, None, None) == "Rice|Lowland Wet"
+        assert _guide_row_key("Rice", None, "Upland", None) == "Rice|Upland"
+
+    def test_tree_crops_still_key_on_age_band(self):
+        from data.nutrient_recommendation_guide import _guide_row_key
+
+        assert _guide_row_key("Coconut", None, None, None) == "Coconut|9yrs & up"
+        assert _guide_row_key("Coconut", None, None, "1-5yrs") == "Coconut|1-5yrs"
+
+    def test_unsplit_crops_key_on_the_bare_name(self):
+        from data.nutrient_recommendation_guide import _guide_row_key
+
+        assert _guide_row_key("Cassava", None, None, None) == "Cassava"
