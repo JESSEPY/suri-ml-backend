@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 import os
+import shutil
 
 logger = logging.getLogger("suri-ml")
 
@@ -44,15 +45,31 @@ def upload_version(version: str, artifact_root: str, client=None) -> bool:
 
 
 def download_version(version: str, artifact_root: str, client=None) -> bool:
+    """Restores files to disk. Downloads into a staging directory first and only
+    creates/replaces the real version directory on full success, so a failed
+    restore (missing version, network error, partial download, ...) never
+    leaves behind an empty or incomplete directory. That matters because
+    boot_version()'s "newest on disk" fallback (ml/model_state.py,
+    main.py::boot_version) would otherwise pick a poisoned directory as the
+    live version and crash the next boot looking for a metadata.json that was
+    never written."""
     directory = os.path.join(artifact_root, version)
+    staging = directory + ".partial"
     try:
         bucket = _client(client).storage.from_(BUCKET)
-        os.makedirs(directory, exist_ok=True)
+        if os.path.isdir(staging):
+            shutil.rmtree(staging)
+        os.makedirs(staging)
         for name in ARTIFACT_FILES:
             payload = bucket.download(f"{version}/{name}")
-            with open(os.path.join(directory, name), "wb") as handle:
+            with open(os.path.join(staging, name), "wb") as handle:
                 handle.write(payload)
+        os.makedirs(artifact_root, exist_ok=True)
+        if os.path.isdir(directory):
+            shutil.rmtree(directory)
+        os.rename(staging, directory)
         return True
     except Exception as error:
         logger.warning("Artifact restore for %s failed: %s", version, error)
+        shutil.rmtree(staging, ignore_errors=True)
         return False

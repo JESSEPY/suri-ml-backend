@@ -82,3 +82,13 @@ class TestDownloadVersion:
         assert artifacts_store.download_version(
             "nope", str(tmp_path), client=FakeClient(store={})
         ) is False
+
+    def test_a_failed_download_leaves_no_directory_behind(self, tmp_path):
+        """The bug this fix closes: a failed restore used to leave an empty,
+        metadata.json-less directory that boot_version()'s "newest on disk"
+        fallback could mistake for a valid version on the next boot."""
+        assert artifacts_store.download_version(
+            "nope", str(tmp_path), client=FakeClient(store={})
+        ) is False
+        assert not (tmp_path / "nope").exists()
+        assert not (tmp_path / "nope.partial").exists()
