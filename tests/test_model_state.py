@@ -3,6 +3,7 @@ import threading
 import pytest
 
 from ml import model_state
+from ml.artifacts_store import ARTIFACT_FILES
 
 
 class TestSnapshotAtomicity:
@@ -50,11 +51,21 @@ class TestSnapshotAtomicity:
             assert regressor == f"r{suffix}"
 
 
+def make_version_dir(root, name, files=ARTIFACT_FILES):
+    """A version directory only counts as available once every artifact file is
+    there -- the contents are never parsed by available_versions()."""
+    directory = root / name
+    directory.mkdir()
+    for filename in files:
+        (directory / filename).write_bytes(b"x")
+    return directory
+
+
 class TestAvailableVersions:
     def test_lists_only_directories_sorted_ascending(self, tmp_path):
-        (tmp_path / "2026-08-01-000000").mkdir()
-        (tmp_path / "2026-08-03-000000").mkdir()
-        (tmp_path / "2026-08-02-000000").mkdir()
+        make_version_dir(tmp_path, "2026-08-01-000000")
+        make_version_dir(tmp_path, "2026-08-03-000000")
+        make_version_dir(tmp_path, "2026-08-02-000000")
         (tmp_path / "notes.txt").write_text("ignored")
 
         assert model_state.available_versions(str(tmp_path)) == [
@@ -63,6 +74,43 @@ class TestAvailableVersions:
 
     def test_missing_root_returns_empty(self, tmp_path):
         assert model_state.available_versions(str(tmp_path / "nope")) == []
+
+    def test_a_half_written_directory_is_not_a_version(self, tmp_path):
+        """ml/train.py makes its output directory first and writes
+        metadata.json last, so a killed run leaves this behind. Counting it
+        would make the next boot load a metadata.json that never existed."""
+        make_version_dir(tmp_path, "2026-08-01-000000")
+        (tmp_path / "2026-08-04-000000").mkdir()  # killed mid-train: empty
+        make_version_dir(
+            tmp_path, "2026-08-05-000000",
+            files=("preprocessor.joblib", "regressor.joblib"),  # no metadata.json
+        )
+
+        assert model_state.available_versions(str(tmp_path)) == ["2026-08-01-000000"]
+
+    def test_a_misnamed_directory_is_not_a_version(self, tmp_path):
+        """Only ml/train.py's %Y-%m-%d-%H%M%S stamp names a real artifact.
+        `.partial` is artifacts_store's staging directory, which survives a
+        SIGKILL that its own cleanup cannot cover."""
+        make_version_dir(tmp_path, "2026-08-01-000000")
+        make_version_dir(tmp_path, "2026-08-02-000000.partial")
+        make_version_dir(tmp_path, "backup")
+        make_version_dir(tmp_path, "2026-08-03-00000")  # one digit short
+
+        assert model_state.available_versions(str(tmp_path)) == ["2026-08-01-000000"]
+
+
+class TestIsVersionName:
+    @pytest.mark.parametrize("name", ["2026-08-06-055755", "1999-12-31-235959"])
+    def test_accepts_the_training_stamp(self, name):
+        assert model_state.is_version_name(name)
+
+    @pytest.mark.parametrize("name", [
+        "", "latest", "../../etc/passwd", "2026-08-06-055755/..",
+        "2026-08-06-055755.partial", "2026-8-6-55755", "2026-08-06-055755\n",
+    ])
+    def test_rejects_anything_else(self, name):
+        assert not model_state.is_version_name(name)
 
 
 class TestVerifyBundle:

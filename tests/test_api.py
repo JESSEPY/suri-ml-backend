@@ -35,6 +35,18 @@ class TestHealth:
         assert body["artifacts_loaded"] is True
         assert body["model_version"]
 
+    def test_reports_the_serving_process_id(self, client):
+        """Promotion hot-swaps the model in one process's memory, so the
+        service is only correct under a single uvicorn worker. The unit file
+        forbids --workers N, but a runtime override wouldn't be caught by a
+        file check -- publishing the pid makes it observable instead: poll
+        /health a few times and differing pids mean more than one worker is
+        answering, and a promotion only reached one of them."""
+        import os
+
+        bodies = [client.get("/health").json() for _ in range(3)]
+        assert {body["pid"] for body in bodies} == {os.getpid()}
+
 
 class TestPredict:
     def test_returns_expected_shape(self, client):

@@ -36,6 +36,11 @@ VALID = {
     "organic_matter_pct": "2.8", "phosphorus_ppm": "18.0", "potassium_cmol_kg": "0.35",
 }
 
+# /model/promote now rejects anything that isn't ml/train.py's
+# "%Y-%m-%d-%H%M%S" stamp, so stand-in versions have to look like real ones.
+CANDIDATE = "2026-08-18-101112"
+BROKEN = "2026-08-18-101113"
+
 
 class TestValidateEndpoint:
     def test_accepts_a_good_file_and_writes_nothing(self, client):
@@ -66,6 +71,52 @@ class TestValidateEndpoint:
             files={"file": ("notes.pdf", io.BytesIO(b"x"), "application/pdf")},
         )
         assert response.status_code == 422
+
+    def test_the_blocking_work_never_runs_on_the_event_loop(self, client, monkeypatch):
+        """The handler must be async to await UploadFile.read(), which means
+        anything after that read runs *on the event loop* unless pushed off
+        it. _existing_laboratory_codes() makes several sequential blocking
+        Supabase calls and validate_rows() runs full agronomy derivation per
+        row; inline, a large upload stalls /predict dispatch for the whole
+        duration -- and "/predict is never paused" is a hard constraint of
+        this pipeline.
+
+        asyncio.get_running_loop() succeeds only when called from the thread
+        currently running the loop, so it is a direct test of the property
+        rather than a proxy for it.
+        """
+        import asyncio
+
+        original_codes = service._existing_laboratory_codes
+        original_validate = service.validate_rows
+        on_loop = []
+
+        def note(name):
+            try:
+                asyncio.get_running_loop()
+            except RuntimeError:
+                return  # a worker thread: exactly right
+            on_loop.append(name)
+
+        def codes():
+            note("_existing_laboratory_codes")
+            return original_codes()
+
+        def validate(raw_rows, existing_codes):
+            note("validate_rows")
+            return original_validate(raw_rows, existing_codes)
+
+        monkeypatch.setattr(service, "_existing_laboratory_codes", codes)
+        monkeypatch.setattr(service, "validate_rows", validate)
+
+        response = client.post(
+            "/training-data/validate",
+            files={"file": ("upload.csv", io.BytesIO(upload_csv([VALID])), "text/csv")},
+        )
+
+        assert response.status_code == 200
+        assert len(response.json()["accepted"]) == 1  # the seams really ran
+        assert on_loop == []
 
 
 class TestCommitEndpoint:
@@ -130,23 +181,25 @@ class TestModelVersionEndpoints:
     def test_promoting_swaps_the_live_bundle(self, client, monkeypatch):
         live = model_state.snapshot()
         monkeypatch.setattr(service.model_state, "available_versions",
-                            lambda root: [live["version"], "candidate"])
+                            lambda root: [live["version"], CANDIDATE])
         monkeypatch.setattr(service.model_state, "load_bundle",
                             lambda version, root: {**live, "version": version})
         monkeypatch.setattr(service.model_state, "verify_bundle", lambda bundle: None)
-        monkeypatch.setattr(service.registry, "set_current", lambda **kwargs: None)
+        monkeypatch.setattr(service.registry, "record_version", lambda **kwargs: None)
+        monkeypatch.setattr(service.registry, "set_current", lambda *args, **kwargs: None)
 
         try:
-            body = client.post("/model/promote", json={"version": "candidate"}).json()
-            assert body["current"] == "candidate"
-            assert model_state.snapshot()["version"] == "candidate"
+            body = client.post("/model/promote", json={"version": CANDIDATE}).json()
+            assert body["current"] == CANDIDATE
+            assert body["registry_recorded"] is True
+            assert model_state.snapshot()["version"] == CANDIDATE
         finally:
             model_state.set_bundle(live)
 
     def test_an_unservable_artifact_is_refused_and_the_live_model_kept(self, client, monkeypatch):
         live = model_state.snapshot()
         monkeypatch.setattr(service.model_state, "available_versions",
-                            lambda root: [live["version"], "broken"])
+                            lambda root: [live["version"], BROKEN])
         monkeypatch.setattr(service.model_state, "load_bundle",
                             lambda version, root: {**live, "version": version})
 
@@ -155,6 +208,142 @@ class TestModelVersionEndpoints:
 
         monkeypatch.setattr(service.model_state, "verify_bundle", refuse)
 
-        response = client.post("/model/promote", json={"version": "broken"})
+        response = client.post("/model/promote", json={"version": BROKEN})
         assert response.status_code == 422
         assert model_state.snapshot()["version"] == live["version"]
+
+    @pytest.mark.parametrize("version", [
+        "../../etc/passwd", "latest", "", "2026-08-06-055755/../../evil",
+        "2026-8-6-055755", "2026-08-06-055755.partial",
+    ])
+    def test_a_malformed_version_is_refused_before_touching_the_disk(
+        self, client, monkeypatch, version
+    ):
+        """request.version reaches os.path.join, shutil.rmtree (via
+        download_version) and joblib.load (unpickling). Reject anything that
+        isn't ml/train.py's stamp before any of that runs -- these seams blow
+        up if they are ever reached."""
+        def explode(*_args, **_kwargs):
+            raise AssertionError("a malformed version must not reach the filesystem")
+
+        monkeypatch.setattr(service.model_state, "available_versions", explode)
+        monkeypatch.setattr(service.artifacts_store, "download_version", explode)
+        monkeypatch.setattr(service.model_state, "load_bundle", explode)
+
+        assert client.post("/model/promote", json={"version": version}).status_code == 422
+
+
+class TestPromoteRegistersBeforePromoting:
+    """set_current() is an UPDATE ... WHERE version = $1. Promoting a version
+    the registry never recorded -- the bootstrap artifact pinned via
+    .gitignore is exactly that -- matched zero rows, PostgREST answered 200,
+    and the promotion survived only in memory until the next restart quietly
+    reverted it. That is the rollback case the pipeline exists for."""
+
+    def _promotable(self, monkeypatch, live):
+        monkeypatch.setattr(service.model_state, "available_versions",
+                            lambda root: [live["version"], CANDIDATE])
+        monkeypatch.setattr(service.model_state, "load_bundle",
+                            lambda version, root: {**live, "version": version})
+        monkeypatch.setattr(service.model_state, "verify_bundle", lambda bundle: None)
+
+    def test_the_version_is_upserted_before_set_current(self, client, monkeypatch):
+        live = model_state.snapshot()
+        self._promotable(monkeypatch, live)
+
+        calls = []
+        monkeypatch.setattr(service.registry, "record_version",
+                            lambda **kwargs: calls.append(("record_version", kwargs)))
+        monkeypatch.setattr(service.registry, "set_current",
+                            lambda version, **kwargs: calls.append(("set_current", version)))
+
+        try:
+            client.post("/model/promote",
+                        json={"version": CANDIDATE, "promoted_by": "admin@suri"})
+        finally:
+            model_state.set_bundle(live)
+
+        assert [name for name, _ in calls] == ["record_version", "set_current"]
+        recorded = calls[0][1]
+        assert recorded["version"] == CANDIDATE
+        # Sourced from the bundle that was just loaded and verified, not
+        # re-read from disk.
+        assert recorded["trained_at"] == live["metadata"]["trained_at"]
+        assert recorded["row_count"] == live["metadata"]["n_rows"]
+        assert recorded["metrics"] == live["metadata"]["metrics"]
+        assert calls[1][1] == CANDIDATE
+
+    def test_a_registry_outage_still_promotes_but_says_so(self, client, monkeypatch):
+        """The in-memory swap already happened and is real, so this stays a
+        200 -- but the admin has to be able to see the promotion won't
+        survive a restart."""
+        live = model_state.snapshot()
+        self._promotable(monkeypatch, live)
+
+        def unreachable(**_kwargs):
+            raise RuntimeError("supabase unreachable")
+
+        monkeypatch.setattr(service.registry, "record_version", unreachable)
+        monkeypatch.setattr(service.registry, "set_current", unreachable)
+
+        try:
+            response = client.post("/model/promote", json={"version": CANDIDATE})
+            assert response.status_code == 200
+            assert response.json()["registry_recorded"] is False
+            assert model_state.snapshot()["version"] == CANDIDATE
+        finally:
+            model_state.set_bundle(live)
+
+
+class TestBootRegistryReconciliation:
+    """A boot that fell back to newest-on-disk used to leave no trace, so
+    every restart made the same blind guess -- and a retrained-then-rejected
+    model would go live on the next reboot with nobody promoting it."""
+
+    def test_records_and_promotes_what_was_actually_booted(self, monkeypatch):
+        booted = model_state.snapshot()
+        recorded, promoted = {}, {}
+
+        monkeypatch.setattr(service.registry, "current_version", lambda: None)
+        monkeypatch.setattr(service.registry, "record_version",
+                            lambda **kwargs: recorded.update(kwargs))
+        monkeypatch.setattr(service.registry, "set_current",
+                            lambda **kwargs: promoted.update(kwargs))
+
+        service._reconcile_boot_registry()
+
+        assert recorded["version"] == booted["version"]
+        assert recorded["trained_at"] == booted["metadata"]["trained_at"]
+        assert recorded["row_count"] == booted["metadata"]["n_rows"]
+        assert promoted == {"version": booted["version"], "promoted_by": "boot-fallback"}
+
+    def test_writes_nothing_when_the_registry_already_agrees(self, monkeypatch):
+        booted = model_state.snapshot()
+        monkeypatch.setattr(service.registry, "current_version", lambda: booted["version"])
+
+        def explode(**_kwargs):
+            raise AssertionError("the registry already names this version; leave it alone")
+
+        monkeypatch.setattr(service.registry, "record_version", explode)
+        monkeypatch.setattr(service.registry, "set_current", explode)
+
+        service._reconcile_boot_registry()
+
+    def test_a_registry_outage_never_blocks_startup(self, monkeypatch):
+        def unreachable(*_args, **_kwargs):
+            raise RuntimeError("supabase unreachable")
+
+        monkeypatch.setattr(service.registry, "current_version", unreachable)
+        service._reconcile_boot_registry()  # must not raise
+
+    def test_it_runs_on_server_startup_not_on_import(self, monkeypatch):
+        """Importing main.py (a test run, a REPL, a script) must never rewrite
+        which version production considers live -- only a process about to
+        serve traffic may claim one."""
+        calls = []
+        monkeypatch.setattr(service, "_reconcile_boot_registry", lambda: calls.append(1))
+
+        with TestClient(service.app):
+            pass
+
+        assert calls == [1]

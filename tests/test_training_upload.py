@@ -13,8 +13,9 @@ import pytest
 
 from data.nutrient_recommendation_guide import k_cmol_to_ppm, target_unit_for_crop
 from data.training_upload import (
-    TEMPLATE_COLUMNS, build_training_row, parse_upload, validate_rows,
+    NUMERIC_BOUNDS, TEMPLATE_COLUMNS, build_training_row, parse_upload, validate_rows,
 )
+from main import SoilTestRequest
 from ml.agronomy import nutrient_requirements, total_nitrogen_from_om
 from ml.recipes import plan_applications
 from ml.remarks import derive_k_remark, derive_om_remark, derive_p_remark, derive_ph_remark
@@ -172,3 +173,62 @@ class TestValidateRowsRejects:
         result = validate_rows([good_a, bad, good_b], existing_codes=set())
         assert [entry["laboratory_code"] for entry in result.accepted] == ["2026-A", "2026-C"]
         assert result.rejected[0]["row_number"] == 3
+
+
+class TestBoundsMatchTheApi:
+    """NUMERIC_BOUNDS exists so an uploaded row is held to the same limits
+    /predict holds a live request to. Nothing but this test enforces that:
+    farm_area_sqm's gt=0/le=2_000_000 was added to SoilTestRequest and never
+    mirrored here, so any positive area was accepted as training data while
+    /predict rejected anything over 2,000,000. Comparing the two tables
+    mechanically is what stops the next such addition drifting silently.
+    """
+
+    @staticmethod
+    def _api_bounds(field_name):
+        """SoilTestRequest's real constraints, read off Pydantic's field
+        metadata (annotated_types Ge/Gt/Le/Lt instances) rather than restated
+        by hand -- restating them is the drift this test exists to catch."""
+        field = SoilTestRequest.model_fields[field_name]
+        bounds = {}
+        for constraint in field.metadata:
+            for name in ("ge", "gt", "le", "lt"):
+                limit = getattr(constraint, name, None)
+                if limit is not None:
+                    bounds[name] = float(limit)
+        return bounds
+
+    @pytest.mark.parametrize("column", sorted(NUMERIC_BOUNDS))
+    def test_every_bound_agrees_with_soil_test_request(self, column):
+        assert NUMERIC_BOUNDS[column] == self._api_bounds(column)
+
+    def test_every_numeric_template_column_has_a_bound(self):
+        """A new bounded field on SoilTestRequest that also appears in the
+        upload template must gain a NUMERIC_BOUNDS entry, or _number() falls
+        back to its generic "> 0" check and silently accepts out-of-range
+        training data."""
+        bounded_in_template = {
+            column for column in TEMPLATE_COLUMNS
+            if column in SoilTestRequest.model_fields
+            and self._api_bounds(column)
+        }
+        assert bounded_in_template == set(NUMERIC_BOUNDS)
+
+    def test_farm_area_above_the_api_ceiling_is_rejected(self):
+        result = validate_rows([{**VALID_ROW, "farm_area_sqm": "2000001"}],
+                               existing_codes=set())
+        assert result.accepted == []
+        assert "farm_area_sqm" in result.rejected[0]["reason"]
+
+    def test_a_zero_farm_area_is_still_rejected(self):
+        """gt=0, not ge=0 -- the distinction the flattened (low, high) tuple
+        shape could not express."""
+        result = validate_rows([{**VALID_ROW, "farm_area_sqm": "0"}],
+                               existing_codes=set())
+        assert result.accepted == []
+        assert "farm_area_sqm" in result.rejected[0]["reason"]
+
+    def test_a_normal_farm_area_still_passes(self):
+        result = validate_rows([{**VALID_ROW, "farm_area_sqm": "5000"}],
+                               existing_codes=set())
+        assert result.rejected == []

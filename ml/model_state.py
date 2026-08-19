@@ -11,13 +11,32 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import threading
 
 import joblib
 import pandas as pd
 
+from ml.artifacts_store import ARTIFACT_FILES
+
 _lock = threading.Lock()
 _current: dict | None = None
+
+# ml/train.py::train() stamps every artifact directory with
+# datetime.strftime("%Y-%m-%d-%H%M%S"). Nothing else is allowed to invent a
+# version string, so anything on disk that doesn't match this shape is not an
+# artifact directory -- a staging leftover (`<version>.partial`), a scratch
+# folder, whatever -- and must never be a promotion or boot-fallback target.
+# \Z, not $: in Python `$` also matches just before a trailing newline, so
+# "2026-08-06-055755\n" would sneak through and reach the filesystem.
+VERSION_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}-\d{6}\Z")
+
+
+def is_version_name(name: str) -> bool:
+    """True only for the artifact-directory naming convention. Callers use it
+    to refuse an attacker- or typo-supplied version before it reaches
+    os.path.join, shutil.rmtree, or joblib.load (unpickling)."""
+    return bool(VERSION_PATTERN.match(name or ""))
 
 
 def load_bundle(version: str, artifact_root: str) -> dict:
@@ -45,12 +64,30 @@ def snapshot() -> dict:
         return _current
 
 
+def _is_complete_version_dir(artifact_root: str, entry: str) -> bool:
+    directory = os.path.join(artifact_root, entry)
+    if not os.path.isdir(directory):
+        return False
+    return all(os.path.isfile(os.path.join(directory, name)) for name in ARTIFACT_FILES)
+
+
 def available_versions(artifact_root: str) -> list[str]:
+    """Only *complete*, correctly-named artifact directories, sorted ascending.
+
+    ml/train.py::train() creates its output directory as its first action and
+    writes metadata.json as its last, so a run killed in between (deploy, OOM,
+    reboot) leaves an empty directory behind. A bare "every subdirectory
+    counts" rule would let main.py::boot_version()'s newest-on-disk fallback
+    pick that carcass, and load_bundle() would then raise FileNotFoundError at
+    import time -- uvicorn exits, systemd's Restart=always retries, crash loop.
+    Requiring all three artifact files (and the version naming convention,
+    which also excludes a `<version>.partial` staging directory left by a
+    SIGKILLed restore) makes an incomplete directory simply invisible."""
     if not os.path.isdir(artifact_root):
         return []
     return sorted(
         entry for entry in os.listdir(artifact_root)
-        if os.path.isdir(os.path.join(artifact_root, entry))
+        if is_version_name(entry) and _is_complete_version_dir(artifact_root, entry)
     )
 
 

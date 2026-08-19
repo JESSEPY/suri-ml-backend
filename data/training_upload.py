@@ -45,12 +45,25 @@ OPTIONAL_COLUMNS = [
 TEMPLATE_COLUMNS = REQUIRED_COLUMNS + OPTIONAL_COLUMNS
 
 # Mirrors main.py's SoilTestRequest Pydantic bounds exactly, so a row that
-# would be refused at /predict is also refused as training data.
-NUMERIC_BOUNDS: dict[str, tuple[float, float]] = {
-    "ph": (0.0, 14.0),
-    "organic_matter_pct": (0.0, 100.0),
-    "phosphorus_ppm": (0.0, 500.0),
-    "potassium_cmol_kg": (0.0, 6.0),
+# would be refused at /predict is also refused as training data. The keys are
+# annotated_types' constraint names on purpose -- Pydantic distinguishes ge
+# from gt, and flattening both to "a low bound" is how farm_area_sqm's gt=0
+# would quietly become ge=0 here. tests/test_training_upload.py's
+# TestBoundsMatchTheApi reads SoilTestRequest's real metadata and fails if
+# this table ever drifts from it again.
+NUMERIC_BOUNDS: dict[str, dict[str, float]] = {
+    "ph": {"ge": 0.0, "le": 14.0},
+    "organic_matter_pct": {"ge": 0.0, "le": 100.0},
+    "phosphorus_ppm": {"ge": 0.0, "le": 500.0},
+    "potassium_cmol_kg": {"ge": 0.0, "le": 6.0},
+    "farm_area_sqm": {"gt": 0.0, "le": 2_000_000.0},
+}
+
+_BOUND_CHECKS = {
+    "ge": (lambda value, limit: value >= limit, "at least"),
+    "gt": (lambda value, limit: value > limit, "greater than"),
+    "le": (lambda value, limit: value <= limit, "at most"),
+    "lt": (lambda value, limit: value < limit, "less than"),
 }
 
 # The ml_soil_training_data column order (data/parse_real_soil_database.py's
@@ -164,9 +177,10 @@ def _number(raw: dict, column: str, required: bool) -> float | None:
 
     bounds = NUMERIC_BOUNDS.get(column)
     if bounds is not None:
-        low, high = bounds
-        if not low <= parsed <= high:
-            raise ValueError(f"{column} must be between {low} and {high}, got {parsed}.")
+        for constraint, limit in bounds.items():
+            holds, phrase = _BOUND_CHECKS[constraint]
+            if not holds(parsed, limit):
+                raise ValueError(f"{column} must be {phrase} {limit}, got {parsed}.")
     elif parsed <= 0:
         raise ValueError(f"{column} must be greater than 0, got {parsed}.")
     return parsed

@@ -201,7 +201,12 @@ for `kg_ha` crops (a per-tree rate needs a tree count, which this API doesn't co
 
 ### `GET /health`
 
-Returns `{status, model_version, artifacts_loaded, supabase_reachable}`.
+Returns `{status, model_version, artifacts_loaded, supabase_reachable, pid}`.
+
+`pid` is the OS process id of the worker that answered. Promotion hot-swaps the model in a single
+process's memory, so the service is only correct with one uvicorn worker (see
+`deploy/suri-ml.service`); polling `/health` a few times and getting different `pid`s means more
+than one worker is answering and promotions are reaching only one of them.
 
 ### Retraining pipeline
 
@@ -215,7 +220,7 @@ All of these require `X-API-Key` when `ML_API_KEY` is set, and are driven by
 | `POST /retrain` | Starts a background retrain; returns `{job_id}`. 409 if one is already running. |
 | `GET /retrain/{job_id}` | `running` / `done` / `failed`, plus metrics and a comparison against the live model once done. |
 | `GET /model/versions` | Every registered version, which one is live, and which are on local disk. |
-| `POST /model/promote` | Hot-swaps the live model to `{version}` (restoring it from Supabase Storage first if it isn't on disk). Rollback is the same call with an older version. |
+| `POST /model/promote` | Hot-swaps the live model to `{version}` (restoring it from Supabase Storage first if it isn't on disk). Rollback is the same call with an older version. `version` must be a `YYYY-MM-DD-HHMMSS` artifact stamp. Returns `{current, previous, registry_recorded}` — `registry_recorded: false` means the swap is live but Supabase couldn't be written, so it will not survive a restart. |
 
 Upload template columns — raw measurements only, everything else is derived
 server-side:

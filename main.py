@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 import os
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Literal
 
@@ -17,6 +18,7 @@ import pandas as pd
 from fastapi import BackgroundTasks, Depends, FastAPI, File, Header, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, field_validator
+from starlette.concurrency import run_in_threadpool
 
 from data.ingest_to_supabase import TABLE as TRAINING_TABLE, ingest_records
 from data.mode_of_application import application_schedule_for_crop
@@ -45,7 +47,17 @@ logging.basicConfig(level=logging.INFO)
 
 SQM_PER_HECTARE = 10_000
 
-app = FastAPI(title="SURI Fertilizer ML Service", version="1.0.0")
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    # Deliberately a server-startup step rather than an import-time one: only
+    # a process that is actually about to serve traffic should claim a version
+    # in the shared registry. Importing main.py (tests, a REPL, a one-off
+    # script) must never rewrite which model production considers live.
+    _reconcile_boot_registry()
+    yield
+
+
+app = FastAPI(title="SURI Fertilizer ML Service", version="1.0.0", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:3000"],
@@ -163,6 +175,43 @@ def boot_version() -> str:
 
 
 model_state.set_bundle(model_state.load_bundle(boot_version(), ARTIFACT_ROOT))
+
+
+def _reconcile_boot_registry() -> None:
+    """Record whichever version this process actually booted, if the registry
+    doesn't already say so.
+
+    Until the retrain pipeline existed, an artifact directory could only reach
+    disk by being git-committed, so "newest on disk" and "the model an admin
+    approved" were the same thing and the fallback needed no record. Now a
+    retrain writes directories nobody approved. If the registry has no current
+    row -- it is brand new, or an outage happened during a promotion -- every
+    restart would otherwise repeat the same blind newest-on-disk guess, so a
+    reviewed-and-rejected model would silently go live on the next reboot.
+    Writing down what was booted turns that one-time guess into an explicit
+    row that all later boots honour.
+
+    Never allowed to block startup: a registry outage degrades to the previous
+    behaviour rather than taking the service down, same posture as the rest of
+    this module.
+    """
+    try:
+        bundle = model_state.snapshot()
+        version = bundle["version"]
+        if registry.current_version() == version:
+            return
+
+        metadata = bundle["metadata"]
+        registry.record_version(
+            version=version,
+            trained_at=metadata["trained_at"],
+            row_count=metadata["n_rows"],
+            metrics=metadata.get("metrics", {}),
+        )
+        registry.set_current(version=version, promoted_by="boot-fallback")
+        logger.info("Recorded booted model version %s as current.", version)
+    except Exception as error:
+        logger.warning("Could not record the booted model version: %s", error)
 
 
 def log_prediction(request: SoilTestRequest, response: PredictionResponse) -> None:
@@ -298,6 +347,12 @@ def health() -> dict:
         "model_version": bundle["version"],
         "artifacts_loaded": True,
         "supabase_reachable": supabase_reachable,
+        # Promotion hot-swaps the model in *this* process's memory, so the
+        # service is only correct with a single uvicorn worker. Reporting the
+        # PID makes a violation observable from outside: repeated /health
+        # calls that come back with different pids mean more than one worker
+        # is answering, and promotions are reaching only one of them.
+        "pid": os.getpid(),
     }
 
 
@@ -408,7 +463,16 @@ async def validate_training_upload(file: UploadFile = File(...)) -> dict:
     except UploadFormatError as error:
         raise HTTPException(status_code=422, detail=str(error))
 
-    result = validate_rows(raw_rows, _existing_laboratory_codes())
+    # This handler has to be async (UploadFile.read() is a coroutine), which
+    # means everything else in it runs *on the event loop* unless pushed off
+    # it: _existing_laboratory_codes() makes several sequential blocking
+    # Supabase calls and validate_rows() runs full agronomy derivation for
+    # every row of the file. Left inline, a large upload would stall /predict
+    # dispatch for the whole duration -- and "/predict is never paused" is a
+    # hard constraint of this pipeline. (/training-data/commit is a plain def,
+    # so FastAPI already threadpools it.)
+    codes = await run_in_threadpool(_existing_laboratory_codes)
+    result = await run_in_threadpool(validate_rows, raw_rows, codes)
     return {
         "template_columns": TEMPLATE_COLUMNS,
         "accepted": result.accepted,
@@ -455,6 +519,16 @@ def model_versions() -> dict:
 
 @app.post("/model/promote", dependencies=[Depends(require_api_key)])
 def promote_model(request: PromoteRequest) -> dict:
+    # Checked before the string is ever joined onto ARTIFACT_ROOT, handed to
+    # shutil.rmtree (inside download_version) or unpickled by joblib.load.
+    # The endpoint is already behind require_api_key and the dashboard's
+    # session check, so this is defence in depth rather than a live hole.
+    if not model_state.is_version_name(request.version):
+        raise HTTPException(
+            status_code=422,
+            detail=f"Invalid version {request.version!r}; expected the YYYY-MM-DD-HHMMSS form.",
+        )
+
     previous = model_state.snapshot()["version"]
 
     if request.version not in model_state.available_versions(ARTIFACT_ROOT):
@@ -478,10 +552,36 @@ def promote_model(request: PromoteRequest) -> dict:
     # already serving the version the admin approved, and the next boot's
     # fallback picks a valid version rather than a phantom one.
     model_state.set_bundle(bundle)
+    registry_recorded = True
     try:
+        # Upsert before set_current, always. set_current is an
+        # UPDATE ... WHERE version = $1: for a version nothing ever
+        # registered -- the original bootstrap artifact pinned via .gitignore
+        # is exactly that -- it matches zero rows, and PostgREST answers 200
+        # with an empty body. The promotion would then live only in memory,
+        # and the next restart's fallback would silently undo it, which is
+        # precisely the roll-back-to-the-known-good-model case this pipeline
+        # exists for. record_version() only writes the columns named here, so
+        # re-upserting an already-registered version leaves promoted_at and
+        # promoted_by (i.e. the promotion history) untouched.
+        metadata = bundle["metadata"]
+        registry.record_version(
+            version=request.version,
+            trained_at=metadata["trained_at"],
+            row_count=metadata["n_rows"],
+            metrics=metadata.get("metrics", {}),
+        )
         registry.set_current(request.version, promoted_by=request.promoted_by)
     except Exception as error:
+        # The in-memory swap already happened and is real, so this is a 200 --
+        # but a silent log line would leave the admin and /model/versions with
+        # no idea the promotion won't survive a restart. Say so in the body.
+        registry_recorded = False
         logger.warning("Promoted %s in memory but could not record it: %s",
                        request.version, error)
 
-    return {"current": request.version, "previous": previous}
+    return {
+        "current": request.version,
+        "previous": previous,
+        "registry_recorded": registry_recorded,
+    }
