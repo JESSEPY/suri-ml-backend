@@ -14,14 +14,18 @@ from datetime import datetime, timezone
 from typing import Literal
 
 import pandas as pd
-from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException
+from fastapi import BackgroundTasks, Depends, FastAPI, File, Header, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, field_validator
 
+from data.ingest_to_supabase import TABLE as TRAINING_TABLE, ingest_records
 from data.mode_of_application import application_schedule_for_crop
 from data.nutrient_recommendation_guide import (
     CROPS, k_cmol_to_ppm, max_total_need, nutrient_requirements, resolve_age_band,
     resolve_cultivation_method, resolve_variety, target_unit_for_crop,
+)
+from data.training_upload import (
+    TEMPLATE_COLUMNS, UploadFormatError, build_training_row, parse_upload, validate_rows,
 )
 from ml.agronomy import total_nitrogen_from_om
 from ml.confidence import (
@@ -33,7 +37,7 @@ from ml.recipes import plan_applications
 from ml.remarks import (
     derive_k_remark, derive_om_remark, derive_p_remark, derive_ph_remark,
 )
-from ml import model_state, registry
+from ml import artifacts_store, model_state, registry, retrain_job
 from ml.train import ARTIFACT_ROOT
 
 logger = logging.getLogger("suri-ml")
@@ -97,6 +101,15 @@ class SoilTestRequest(BaseModel):
             and self.phosphorus_ppm is not None
             and self.potassium_cmol_kg is not None
         )
+
+
+class CommitRequest(BaseModel):
+    rows: list[dict]
+
+
+class PromoteRequest(BaseModel):
+    version: str
+    promoted_by: str | None = None
 
 
 class FarmTotals(BaseModel):
@@ -175,6 +188,30 @@ def _log_prediction_safe(request: SoilTestRequest, response: PredictionResponse)
         log_prediction(request, response)
     except Exception as error:
         logger.warning("Prediction logging failed (returning result anyway): %s", error)
+
+
+def _existing_laboratory_codes() -> set[str]:
+    """Every laboratory_code already in the corpus, so an upload can flag
+    duplicates before writing anything. Read in pages for the same reason
+    ml/train.py's read is paged -- PostgREST caps a response at 1000 rows."""
+    from data.ingest_to_supabase import get_client
+    from ml.train import SUPABASE_PAGE_SIZE
+
+    client = get_client()
+    codes: set[str] = set()
+    start = 0
+    while True:
+        page = client.table(TRAINING_TABLE).select("laboratory_code").range(
+            start, start + SUPABASE_PAGE_SIZE - 1
+        ).execute().data or []
+        codes.update(row["laboratory_code"] for row in page)
+        if len(page) < SUPABASE_PAGE_SIZE:
+            return codes
+        start += SUPABASE_PAGE_SIZE
+
+
+def _commit_rows(rows: list[dict]) -> int:
+    return ingest_records(rows)
 
 
 def _build_feature_row(request: SoilTestRequest) -> pd.DataFrame:
@@ -359,3 +396,92 @@ def predict(request: SoilTestRequest, background_tasks: BackgroundTasks) -> Pred
     background_tasks.add_task(_log_prediction_safe, request, response)
 
     return response
+
+
+@app.post("/training-data/validate", dependencies=[Depends(require_api_key)])
+async def validate_training_upload(file: UploadFile = File(...)) -> dict:
+    """Dry run: parses, validates, and shows what every accepted row would
+    contribute. Writes nothing."""
+    content = await file.read()
+    try:
+        raw_rows = parse_upload(content, file.filename or "upload.csv")
+    except UploadFormatError as error:
+        raise HTTPException(status_code=422, detail=str(error))
+
+    result = validate_rows(raw_rows, _existing_laboratory_codes())
+    return {
+        "template_columns": TEMPLATE_COLUMNS,
+        "accepted": result.accepted,
+        "rejected": result.rejected,
+    }
+
+
+@app.post("/training-data/commit", dependencies=[Depends(require_api_key)])
+def commit_training_upload(request: CommitRequest) -> dict:
+    """Re-validates from the raw rows rather than trusting anything derived
+    client-side, then upserts only what passes."""
+    if not request.rows:
+        raise HTTPException(status_code=422, detail="No rows supplied.")
+
+    result = validate_rows(request.rows, _existing_laboratory_codes())
+    committed = _commit_rows([build_training_row(entry["raw"]) for entry in result.accepted])
+    return {"committed": committed, "rejected": result.rejected}
+
+
+@app.post("/retrain", dependencies=[Depends(require_api_key)])
+def start_retrain() -> dict:
+    try:
+        return {"job_id": retrain_job.start_job()}
+    except retrain_job.RetrainInProgress as error:
+        raise HTTPException(status_code=409, detail=str(error))
+
+
+@app.get("/retrain/{job_id}", dependencies=[Depends(require_api_key)])
+def retrain_status(job_id: str) -> dict:
+    job = retrain_job.get_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail=f"No retrain job {job_id!r}.")
+    return job
+
+
+@app.get("/model/versions", dependencies=[Depends(require_api_key)])
+def model_versions() -> dict:
+    return {
+        "current": model_state.snapshot()["version"],
+        "versions": registry.list_versions(),
+        "on_disk": model_state.available_versions(ARTIFACT_ROOT),
+    }
+
+
+@app.post("/model/promote", dependencies=[Depends(require_api_key)])
+def promote_model(request: PromoteRequest) -> dict:
+    previous = model_state.snapshot()["version"]
+
+    if request.version not in model_state.available_versions(ARTIFACT_ROOT):
+        # Not on this instance -- try the off-instance backup before giving up,
+        # which is what makes rollback survive an EC2 rebuild.
+        if not artifacts_store.download_version(request.version, ARTIFACT_ROOT):
+            raise HTTPException(
+                status_code=404,
+                detail=f"Artifact {request.version!r} is not on disk and could not be restored.",
+            )
+
+    try:
+        bundle = model_state.load_bundle(request.version, ARTIFACT_ROOT)
+        model_state.verify_bundle(bundle)
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error))
+    except Exception as error:
+        raise HTTPException(status_code=422, detail=f"Could not load {request.version!r}: {error}")
+
+    # Swap first, then record: if the registry write fails, the service is
+    # already serving the version the admin approved, and the next boot's
+    # fallback picks a valid version rather than a phantom one.
+    model_state.set_bundle(bundle)
+    try:
+        registry.set_current(request.version, promoted_by=request.promoted_by)
+    except Exception as error:
+        logger.warning("Promoted %s in memory but could not record it: %s",
+                       request.version, error)
+
+    return {"current": request.version, "previous": previous}
