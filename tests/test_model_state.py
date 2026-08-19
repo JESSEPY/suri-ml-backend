@@ -126,3 +126,32 @@ class TestVerifyBundle:
 
     def test_accepts_the_real_currently_loaded_bundle(self):
         model_state.verify_bundle(model_state.snapshot())
+
+    def test_the_newest_artifact_s_encoder_vocabulary_matches_the_code(self):
+        """Artifact/code drift, asserted directly instead of by luck.
+
+        verify_bundle()'s probe row is built from CROPS[0] alone, so it only
+        notices a vocabulary change when the crop that happens to sort first
+        is the one that moved. Today that is "Alugbati", which is why the
+        crop-coverage expansion's drift was caught at all -- a crop added
+        further down the list would have sailed through and reached a live
+        artifact, exactly the failure Task 9 of
+        docs/superpowers/plans/2026-08-18-crop-coverage-expansion.md had to
+        repair by hand.
+
+        Anchored on the newest complete artifact directory rather than
+        model_state.snapshot(): the newest directory is what a retrain just
+        produced and what a fresh instance falls back to, so this fails the
+        moment someone edits GUIDE_ROWS without retraining. snapshot() is the
+        wrong anchor here -- it holds whatever the shared registry currently
+        calls live, which is deliberately allowed to be an older, narrower
+        artifact (promotion is a human decision), and main.py's predict path
+        already refuses crops absent from a bundle's own by_crop metrics."""
+        from data.nutrient_recommendation_guide import CANONICAL_CROPS
+        from ml.train import ARTIFACT_ROOT
+
+        newest = model_state.available_versions(ARTIFACT_ROOT)[-1]
+        bundle = model_state.load_bundle(newest, ARTIFACT_ROOT)
+        encoder = bundle["preprocessor"].named_transformers_["nom"]
+
+        assert list(encoder.categories_[0]) == CANONICAL_CROPS
