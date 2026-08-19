@@ -8,13 +8,11 @@ for a different, unrelated crop-capability contract.
 
 from __future__ import annotations
 
-import json
 import logging
 import os
 from datetime import datetime, timezone
 from typing import Literal
 
-import joblib
 import pandas as pd
 from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -35,6 +33,7 @@ from ml.recipes import plan_applications
 from ml.remarks import (
     derive_k_remark, derive_om_remark, derive_p_remark, derive_ph_remark,
 )
+from ml import model_state, registry
 from ml.train import ARTIFACT_ROOT
 
 logger = logging.getLogger("suri-ml")
@@ -128,34 +127,29 @@ class PredictionResponse(BaseModel):
     confidence: Confidence | None
 
 
-def latest_version() -> str:
-    if not os.path.isdir(ARTIFACT_ROOT):
+def boot_version() -> str:
+    """The registry is the authority on which version is live; the newest
+    directory on disk is the fallback so a Supabase outage can't stop the
+    service from booting. A registry version that isn't on disk (e.g. this
+    instance was rebuilt) also falls back rather than crashing."""
+    on_disk = model_state.available_versions(ARTIFACT_ROOT)
+    if not on_disk:
         raise RuntimeError(
             f"No artifact directory at {ARTIFACT_ROOT}. Run: python -m ml.train --csv <path>"
         )
-    versions = sorted(entry for entry in os.listdir(ARTIFACT_ROOT)
-                      if os.path.isdir(os.path.join(ARTIFACT_ROOT, entry)))
-    if not versions:
-        raise RuntimeError(f"{ARTIFACT_ROOT} is empty. Run: python -m ml.train --csv <path>")
-    return versions[-1]
+
+    promoted = registry.current_version()
+    if promoted and promoted in on_disk:
+        return promoted
+    if promoted:
+        logger.warning(
+            "Registry says %s is current but it is not on disk; falling back to %s",
+            promoted, on_disk[-1],
+        )
+    return on_disk[-1]
 
 
-def load_artifacts() -> dict:
-    """Load at import time so a missing or corrupt model fails at boot rather
-    than surfacing as a 500 on every request, or silently serving a stale model."""
-    version = latest_version()
-    directory = os.path.join(ARTIFACT_ROOT, version)
-    with open(os.path.join(directory, "metadata.json")) as handle:
-        metadata = json.load(handle)
-    return {
-        "version": version,
-        "preprocessor": joblib.load(os.path.join(directory, "preprocessor.joblib")),
-        "regressor": joblib.load(os.path.join(directory, "regressor.joblib")),
-        "metadata": metadata,
-    }
-
-
-ARTIFACTS = load_artifacts()
+model_state.set_bundle(model_state.load_bundle(boot_version(), ARTIFACT_ROOT))
 
 
 def log_prediction(request: SoilTestRequest, response: PredictionResponse) -> None:
@@ -215,14 +209,14 @@ def _build_feature_row(request: SoilTestRequest) -> pd.DataFrame:
 _TARGET_KEYS = ("target_n", "target_p2o5", "target_k2o")
 
 
-def _compute_confidence(crop: str, X) -> Confidence | None:
+def _compute_confidence(bundle: dict, crop: str, X) -> Confidence | None:
     """Tier 1: this crop's historical held-out accuracy for the worst
     (lowest-confidence) of the three targets, since a report shows all
     three together and the weakest one is what should drive trust. Tier 2:
     if the two sub-models disagree a lot on THIS specific input, downgrade
     one level regardless of the crop's historical track record -- see
     docs/superpowers/specs/2026-08-12-ml-prediction-confidence-design.md."""
-    crop_metrics = ARTIFACTS["metadata"].get("metrics", {}).get("by_crop", {}).get(crop)
+    crop_metrics = bundle["metadata"].get("metrics", {}).get("by_crop", {}).get(crop)
     if not crop_metrics:
         return None
 
@@ -238,7 +232,7 @@ def _compute_confidence(crop: str, X) -> Confidence | None:
     worst_tier, worst_pct = min(tiers_and_pcts, key=lambda pair: tier_rank[pair[0]])
 
     max_disagreement = 0.0
-    for voter in ARTIFACTS["regressor"].models_:
+    for voter in bundle["regressor"].models_:
         xgb_log_pred = voter.named_estimators_["xgb"].predict(X)[0]
         krr_log_pred = voter.named_estimators_["krr"].predict(X)[0]
         blended_log_pred = voter.predict(X)[0]
@@ -261,9 +255,10 @@ def health() -> dict:
     except Exception:
         supabase_reachable = False
 
+    bundle = model_state.snapshot()
     return {
         "status": "ok",
-        "model_version": ARTIFACTS["version"],
+        "model_version": bundle["version"],
         "artifacts_loaded": True,
         "supabase_reachable": supabase_reachable,
     }
@@ -271,6 +266,10 @@ def health() -> dict:
 
 @app.post("/predict", response_model=PredictionResponse, dependencies=[Depends(require_api_key)])
 def predict(request: SoilTestRequest, background_tasks: BackgroundTasks) -> PredictionResponse:
+    # One snapshot for the whole request: promotion rebinds the module's
+    # bundle reference, and reading it more than once could otherwise pair an
+    # old regressor's numbers with a new version string in the same response.
+    bundle = model_state.snapshot()
     features = _build_feature_row(request)
 
     if request.is_complete():
@@ -298,13 +297,13 @@ def predict(request: SoilTestRequest, background_tasks: BackgroundTasks) -> Pred
         confidence = None
     else:
         try:
-            X = ARTIFACTS["preprocessor"].transform(features)
+            X = bundle["preprocessor"].transform(features)
         except ValueError as error:
             raise HTTPException(status_code=422, detail=str(error))
-        n, p2o5, k2o = ARTIFACTS["regressor"].predict(X)[0]
+        n, p2o5, k2o = bundle["regressor"].predict(X)[0]
         n, p2o5, k2o = float(n), float(p2o5), float(k2o)
         source = "ml-ensemble"
-        confidence = _compute_confidence(request.crop, X)
+        confidence = _compute_confidence(bundle, request.crop, X)
 
     n, p2o5, k2o = round(n, 3), round(p2o5, 3), round(k2o, 3)
     # A fixed property of the crop config, not the soil reading -- computed
@@ -352,7 +351,7 @@ def predict(request: SoilTestRequest, background_tasks: BackgroundTasks) -> Pred
             "k_remark": features.at[0, "k_remark"],
         },
         farm_totals=farm_totals,
-        model_version=ARTIFACTS["version"],
+        model_version=bundle["version"],
         source=source,
         confidence=confidence,
     )
