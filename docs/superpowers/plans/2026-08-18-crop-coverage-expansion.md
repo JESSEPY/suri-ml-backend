@@ -27,6 +27,41 @@
 - **`handle_unknown="error"` stays.** No crop may silently produce an all-zeros feature vector.
 - Commit after every task. Run `python -m pytest` from `suri-ml-backend/` before each commit.
 
+## Real Data Availability (checked 2026-08-19, against the actual Region 7 database)
+
+**Methodology:** `suri/public/Region 7-National Soil Database_2022-2025.xlsx` (the same file `data/parse_real_soil_database.py` already parses to produce `suri_real_training_data.csv`) has **9,654 rows with a lab code** across its four sheets. Only 3,076 (31.9%) reached the training corpus. Counted the rest by crop-text label — a literal, case-insensitive match against the raw `crop` column, **not** run through `normalize_crop()` (see the gap below for why that distinction matters). 1,979 rows are intercropping entries (`"Cassava, Corn"`, `"Corn, Peanut, Monggo"`, etc.) — a genuinely separate problem, since one soil reading can't be cleanly attributed to one crop's nutrient needs without a design decision on how to split it, and they're excluded from every count below.
+
+| Plan group | Real rows found, by literal label |
+|---|---|
+| Original 9 (already trained) | 3,056 (close to the 3,076 in the corpus; the gap is rows the actual parser recovers via patterns this simple text match doesn't try, e.g. `"OPV Corn"`, `"Hybrid Rice"` — see below) |
+| Task 3: Vegetables | 121 — Lettuce 22, Pechay 21, Ampalaya 18, Eggplant 18, Cabbage 8, Okra 9, Squash 8, Carrots 4, Cauliflower 4, Radish 3, Broccoli 1, Cucumber 2, Watermelon 2, Upo 1 |
+| Task 4: Condiments/Rootcrops/Legumes/Sugarcane | 71 — Sugarcane 42, Ube 10, Ginger 6, Beans 6, Gabi 3, Onion 2, Chili Pepper 1, Potato 1 |
+| Task 5: Free-species aliases | 21 — Camote 11, Sorghum 8, Soybean 1, Durian 1 |
+| Task 6: Tree/plantation | 21 — Calamansi 9, Avocado 4, Jackfruit 2, Lemon 2, Pineapple 1, Papaya 1, Guyabano 1, Rambutan 1 |
+| Deferred (Coffee/Dragon Fruit) | 31 — Coffee 16, Dragon Fruit/Dragonfruit 15 |
+
+Every crop this plan already scoped has real backing data. Coffee and Dragon Fruit specifically have 16 and 15 rows respectively — confirming those two are blocked by the guide's own printed anomalies (non-monotonic/blank cells), not by data scarcity; the moment DA RSL resolves those cells, real rows are waiting.
+
+### A real gap this plan does not close
+
+**`data/parse_real_soil_database.py::normalize_crop()` only recognizes the current 9 crops — confirmed directly, not assumed:**
+
+```python
+>>> normalize_crop("Ampalaya")
+None
+>>> normalize_crop("Cabbage")
+None
+>>> normalize_crop("Garlic")
+None
+```
+
+It returns `None` even for an exact, cleanly-spelled literal match. None of this plan's 9 tasks touch that file. So the table above is a real, counted *availability* number — but **none of those rows are actually extractable into `suri_real_training_data.csv` until `normalize_crop()` (and its co-listed-species handling) is taught the new crop vocabulary.** This plan makes the model capable of learning 27 new crops; it does not build the pipeline that would feed them real historical rows. Task 9's retrain will run against the same 3,076-row corpus as today — the 27 new crops will have zero training rows and rely entirely on Task 7's guard (exact guide-table lookup for complete data, 422 refusal for incomplete data) until a follow-up extraction task exists.
+
+Two things worth knowing before writing that follow-up:
+
+- **`normalize_crop()` already handles variety-prefixed text well** for the crops it knows: `"OPV Corn"`, `"Hybrid Rice"`, `"Corn OPV"`, `"Hybrid Corn"` all resolve correctly today. Extending it for new crops is the same pattern, not new machinery.
+- **Real-world labels don't always match this plan's clean crop/alias names.** Concretely: `"Talong"` (Filipino for eggplant) appears **14 times** as a raw label and is not covered by Task 3's `Okra → Eggplant` alias — it would need its own `"Talong" → "Eggplant"` alias for those rows to ever be recovered. Other unmatched labels worth a look when that task is written: `"Sweetcorn"`/`"Sweet Corn"` (≈26 rows, a Corn variant), `"Upland Rice"` (10 rows, likely `cultivation_method`, not a new crop), `"Sayote"` (9, already `Chayote`'s Filipino name but spelled differently in the sheet), `"Baguio Beans"` (8, a Beans variant), `"Ubi"` (8, likely the same as `"Ube"`).
+
 ---
 
 ### Task 1: Derive the crop registry from GUIDE_ROWS
@@ -1696,6 +1731,8 @@ If Plan A is already deployed, promote through the admin UI's Model Training →
 - **Abaca** — K reads `.045 / .03 / .015 / .05`, with the `251-300` value above the band below it. (Not flagged in the `.md`'s notes; caught during this plan's cross-check.)
 
 These three need an authoritative answer from DA RSL, not a re-scan. Adding them afterwards is pure data — Abaca's `Pulp`/`Cordage` cycle axis is handled by the same `DEFAULT_VARIETY_ROW` mechanism Pineapple uses, and Coffee's and Dragon Fruit's age bands by the same `BEARING_AGE_BAND` mechanism the other tree crops use. That would take coverage from 36 to **39**.
+
+This isn't blocked by a lack of real data, either — see "Real Data Availability" above: the Region 7 database has 16 real Coffee rows and 15 real Dragon Fruit rows waiting, once DA RSL resolves the guide cells and (separately) `normalize_crop()` is extended to recognize them.
 
 Everything else — the pipeline, the alias mechanism, the untrained-crop guard — already supports them the moment their rows exist.
 
