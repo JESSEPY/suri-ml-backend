@@ -13,14 +13,30 @@ __pycache__/
 *.csv
 !tests/fixtures/*.csv
 
-# Trained model artifacts — reproducible via ml/train.py, EXCEPT the one
-# version pinned below: main.py loads the latest artifact directory at
-# import time (boot-time, not per-request), so Render needs a real model
-# on disk the moment it clones this repo, and training data (*.csv, also
-# gitignored above) isn't committed for it to retrain from on deploy.
-# If you retrain and want the new version deployed, update the pinned
-# path here to match, then commit the new (small) artifact directory.
+# Trained model artifacts — reproducible via ml/train.py, EXCEPT the
+# versions pinned below: main.py::boot_version() loads an artifact at import
+# time (boot-time, not per-request), so Render needs a real model on disk the
+# moment it clones this repo, and training data (*.csv, also gitignored
+# above) isn't committed for it to retrain from on deploy.
+#
+# Pin BOTH the version the shared registry currently calls live AND any newer
+# candidate you want promotable from a fresh instance. boot_version() only
+# honours the registry's answer when that version is `in on_disk`; if the
+# registry's choice isn't pinned here, a freshly cloned instance silently
+# falls back to "newest on disk" and auto-promotes — which this project
+# treats as a human decision, never a side effect of a restart.
+#
+# 2026-08-06-055755 — pre-crop-expansion (9-crop encoder vocabulary), what
+#   the registry currently marks current.
+# 2026-08-19-160748 — retrained against the 35-crop vocabulary (Task 9 of
+#   docs/superpowers/plans/2026-08-18-crop-coverage-expansion.md); on disk and
+#   promotable, but not live until a human promotes it.
+#
+# If you retrain and want the new version deployed, add its pinned path here,
+# commit the new (small) artifact directory, and promote it explicitly.
 ml/artifacts/*
+!ml/artifacts/2026-08-06-055755/
+!ml/artifacts/2026-08-06-055755/**
 !ml/artifacts/2026-08-19-160748/
 !ml/artifacts/2026-08-19-160748/**
 
