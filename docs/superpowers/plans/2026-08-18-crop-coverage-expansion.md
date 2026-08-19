@@ -14,7 +14,7 @@
 
 ## Global Constraints
 
-- **Source of truth is `suri/public/Nutrient Recommendation Guide.pdf`**, with `suri/public/Nutrient Recommendation Guide.md` as a full structured transcription of it. Enter values from the `.md`; treat the PDF as the tiebreaker if they ever disagree.
+- **Source of truth is `Nutrient Recommendation Guide.pdf`** (at this repo's root), with `Nutrient Recommendation Guide.md` as a full structured transcription of it. Enter values from the `.md`; treat the PDF as the tiebreaker if they ever disagree. Both files are byte-identical copies of `suri/public/Nutrient Recommendation Guide.{md,pdf}` (confirmed via checksum) — kept here too so tasks working in this repo don't need to reach into the sibling `suri` repo.
 - **The `.md` transcription has been cross-checked and corroborates the existing code.** All 9 currently-coded crops match it band-for-band, and it independently confirms all four transcription errors recorded in `data/nutrient_recommendation_guide.py`'s docstring (Rice|Upland's K 251-300 = `0`; Rice|Lowland Wet's OM = `60/40/35`; Rice|Lowland Dry's OM >5.6 = `45`; Corn's K 251-300 = `20`). It also confirms the unresolved `TestGoldenRecordRiceInbred` discrepancy is real: no `40` appears anywhere in Rice's K column under any cultivation method. Two independent transcriptions agreeing is the strongest verification available short of a DA-issued digital copy — **so the per-crop PDF re-check that earlier drafts of this plan required is no longer a blocking step for Phase 1 crops.**
 - **Read the `.md`'s "Transcription notes" section before entering any value.** It flags cells that are anomalous *in the source document itself* (missing decimal points, duplicate labels, blank cells, non-monotonic rows) — those are data-quality problems no re-scan will fix, and are why Phase 2 crops are deferred.
 - **Band structure is fixed by the guide's columns:**
@@ -493,7 +493,7 @@ git commit -m "feat: add crop aliases resolving to canonical guide rows"
 
 ### Task 3: Transcribe the vegetable rows
 
-**These values are verified.** Every cell below was independently transcribed twice — once for this plan and once into `suri/public/Nutrient Recommendation Guide.md` — and the two agree exactly, including the four cells the first pass flagged as uncertain (Squash's 4th OM cell = `30`, Strawberry's 2nd P cell = `20`). Enter them as written; no per-cell re-check is required.
+**These values are verified.** Every cell below was independently transcribed twice — once for this plan and once into `Nutrient Recommendation Guide.md` — and the two agree exactly, including the four cells the first pass flagged as uncertain (Squash's 4th OM cell = `30`, Strawberry's 2nd P cell = `20`). Enter them as written; no per-cell re-check is required.
 
 **Files:**
 - Modify: `data/nutrient_recommendation_guide.py`
@@ -563,7 +563,7 @@ Expected: FAIL with `KeyError: "Unknown crop 'Alugbati'"`
 
 - [ ] **Step 3: Confirm the source rows**
 
-Open `suri/public/Nutrient Recommendation Guide.md` → `Table 3` → `### VEGETABLES`. Confirm the 13 rows there match the values in Step 4 (they were derived from it). One genuine source anomaly to be aware of, per that file's transcription note 6:
+Open `Nutrient Recommendation Guide.md` → `Table 3` → `### VEGETABLES`. Confirm the 13 rows there match the values in Step 4 (they were derived from it). One genuine source anomaly to be aware of, per that file's transcription note 6:
 
 - **Celery's `K >301` cell is blank in the original**, not `0`. Step 4 encodes it as `0`, matching what every other vegetable prints in that column. This is a deliberate, documented inference — note it in the code comment rather than leaving it silent.
 
@@ -756,7 +756,7 @@ Expected: FAIL with `KeyError: "Unknown crop 'Garlic'"`
 
 - [ ] **Step 3: Confirm the source rows**
 
-Open `suri/public/Nutrient Recommendation Guide.md` → `Table 3` → the `### CONDIMENTS/ SPICES`, `### ROOTCROPS`, `### LEGUMES` sections and Sugarcane's row under `### INDUSTRIAL CROPS`. Confirm the values match Step 4. Two earlier uncertainties are now settled and need no further checking: **Onion Spring's 3rd OM cell is `70`**, and **Potato's 4th K cell is `0`**.
+Open `Nutrient Recommendation Guide.md` → `Table 3` → the `### CONDIMENTS/ SPICES`, `### ROOTCROPS`, `### LEGUMES` sections and Sugarcane's row under `### INDUSTRIAL CROPS`. Confirm the values match Step 4. Two earlier uncertainties are now settled and need no further checking: **Onion Spring's 3rd OM cell is `70`**, and **Potato's 4th K cell is `0`**.
 
 **The legume structure is confirmed**, which resolves the open question from this plan's earlier draft. The `.md`'s `Inoculant` column shows the `with`/`w/o` label is a **per-row property, not an axis over the group**:
 
@@ -1723,7 +1723,7 @@ If Plan A is already deployed, promote through the admin UI's Model Training →
 
 ## Deliberately Deferred
 
-**Six of the nine age-banded crops are now in the plan** as Task 6 — Pineapple, Papaya, Avocado, Citrus, Guava, and Lanzones. Task 1's generalized row-key mechanism meant they needed no structural work, only data, and the full transcription in `suri/public/Nutrient Recommendation Guide.md` supplied values clean enough to use (with the inferences that task documents). Papaya carries one unresolved cell and may be dropped at Task 6 Step 0, which would land coverage at 35 rather than 36.
+**Six of the nine age-banded crops are now in the plan** as Task 6 — Pineapple, Papaya, Avocado, Citrus, Guava, and Lanzones. Task 1's generalized row-key mechanism meant they needed no structural work, only data, and the full transcription in `Nutrient Recommendation Guide.md` supplied values clean enough to use (with the inferences that task documents). Papaya carries one unresolved cell and may be dropped at Task 6 Step 0, which would land coverage at 35 rather than 36.
 
 **Three remain out of scope**, blocked on anomalies *in the printed document* that no better scan fixes:
 - **Coffee `6-10 yrs`** — K reads `.36 / .12 / .60`, non-monotonic where every other row decreases across K classes.
