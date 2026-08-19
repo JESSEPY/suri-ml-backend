@@ -24,7 +24,7 @@ from data.ingest_to_supabase import TABLE as TRAINING_TABLE, ingest_records
 from data.mode_of_application import application_schedule_for_crop
 from data.nutrient_recommendation_guide import (
     CROPS, k_cmol_to_ppm, max_total_need, nutrient_requirements, resolve_age_band,
-    resolve_cultivation_method, resolve_variety, target_unit_for_crop,
+    resolve_crop, resolve_cultivation_method, resolve_variety, target_unit_for_crop,
 )
 from data.training_upload import (
     TEMPLATE_COLUMNS, UploadFormatError, build_training_row, parse_upload, validate_rows,
@@ -283,7 +283,9 @@ def _build_feature_row(request: SoilTestRequest) -> pd.DataFrame:
         "om_remark": derive_om_remark(organic_matter),
         "p_remark": derive_p_remark(request.phosphorus_ppm),
         "k_remark": derive_k_remark(k_ppm),
-        "crop": request.crop,
+        # Canonical name only: the encoder's vocabulary is CANONICAL_CROPS, so
+        # an alias would trip handle_unknown="error".
+        "crop": resolve_crop(request.crop),
         "variety": resolve_variety(request.crop, request.variety),
         "cultivation_method": resolve_cultivation_method(request.crop, request.cultivation_method),
         "age_band": resolve_age_band(request.crop, request.age_band),
@@ -395,7 +397,7 @@ def predict(request: SoilTestRequest, background_tasks: BackgroundTasks) -> Pred
         n, p2o5, k2o = bundle["regressor"].predict(X)[0]
         n, p2o5, k2o = float(n), float(p2o5), float(k2o)
         source = "ml-ensemble"
-        confidence = _compute_confidence(bundle, request.crop, X)
+        confidence = _compute_confidence(bundle, resolve_crop(request.crop), X)
 
     n, p2o5, k2o = round(n, 3), round(p2o5, 3), round(k2o, 3)
     # A fixed property of the crop config, not the soil reading -- computed

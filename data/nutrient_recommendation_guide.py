@@ -302,7 +302,22 @@ CANONICAL_CROPS: list[str] = sorted({key.split("|", 1)[0] for key in GUIDE_ROWS}
 
 TARGET_UNIT: dict[str, str] = _derive_target_units(GUIDE_ROWS)
 
-CROPS: list[str] = list(CANONICAL_CROPS)
+# Species the guide prints on the SAME row as a canonical crop, sharing its
+# exact rates. Aliasing rather than duplicating keeps one row per set of
+# numbers, so the one-hot feature width tracks guide rows (not selectable
+# names) and a rate correction is still a single edit.
+CROP_ALIASES: dict[str, str] = {}
+
+
+def resolve_crop(crop: str) -> str:
+    if crop in CROP_ALIASES:
+        return CROP_ALIASES[crop]
+    if crop in CANONICAL_CROPS:
+        return crop
+    raise KeyError(f"Unknown crop {crop!r}")
+
+
+CROPS: list[str] = CANONICAL_CROPS + sorted(CROP_ALIASES)
 
 # For crops the guide splits on a non-age, non-cultivation axis, the row label
 # used when the caller supplies nothing (or something this crop doesn't have).
@@ -326,8 +341,7 @@ def max_total_need(
     kg/ha magnitude. Raises KeyError for the same inputs
     nutrient_requirements() would. See shared/utils/ml-crop-ranking.ts
     (selfRelativeNeedScore) in the sibling `suri` repo for the consumer."""
-    if crop not in CROPS:
-        raise KeyError(f"Unknown crop {crop!r}")
+    crop = resolve_crop(crop)
     key = _guide_row_key(crop, variety, cultivation_method, age_band)
     row = GUIDE_ROWS[key]
     return round(
@@ -339,17 +353,17 @@ def max_total_need(
 
 
 def target_unit_for_crop(crop: str) -> str:
-    return TARGET_UNIT[crop]
+    return TARGET_UNIT[resolve_crop(crop)]
 
 
 def resolve_variety(crop: str, variety: str | None) -> str:
-    if variety in VARIETIES_BY_CROP.get(crop, ()):
+    if variety in VARIETIES_BY_CROP.get(resolve_crop(crop), ()):
         return variety
     return "None"
 
 
 def resolve_cultivation_method(crop: str, cultivation_method: str | None) -> str:
-    if crop != "Rice":
+    if resolve_crop(crop) != "Rice":
         return "None"
     if cultivation_method in RICE_CULTIVATION_METHODS:
         return cultivation_method
@@ -357,10 +371,11 @@ def resolve_cultivation_method(crop: str, cultivation_method: str | None) -> str
 
 
 def resolve_age_band(crop: str, age_band: str | None) -> str:
-    if crop not in BEARING_AGE_BAND:
+    canonical = resolve_crop(crop)
+    if canonical not in BEARING_AGE_BAND:
         return "None"
     if age_band in (None, "bearing"):
-        return BEARING_AGE_BAND[crop]
+        return BEARING_AGE_BAND[canonical]
     return age_band
 
 
@@ -396,8 +411,7 @@ def nutrient_requirements(
     to int would round every one of those down to 0, silently zeroing out
     entire crops' worth of recommendations (and, once a later task's parser
     uses this function to build training labels, corrupting them too)."""
-    if crop not in CROPS:
-        raise KeyError(f"Unknown crop {crop!r}")
+    crop = resolve_crop(crop)
     key = _guide_row_key(crop, variety, cultivation_method, age_band)
     row = GUIDE_ROWS[key]
     k_ppm = k_cmol_to_ppm(k_cmol_kg)

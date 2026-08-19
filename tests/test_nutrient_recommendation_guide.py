@@ -279,3 +279,47 @@ class TestGuideRowKeyGeneralization:
         from data.nutrient_recommendation_guide import _guide_row_key
 
         assert _guide_row_key("Cassava", None, None, None) == "Cassava"
+
+
+class TestCropAliases:
+    def test_an_alias_resolves_to_its_canonical_crop(self):
+        from data.nutrient_recommendation_guide import CROP_ALIASES, resolve_crop
+
+        for alias, canonical in CROP_ALIASES.items():
+            assert resolve_crop(alias) == canonical
+
+    def test_a_canonical_crop_resolves_to_itself(self):
+        from data.nutrient_recommendation_guide import resolve_crop
+
+        assert resolve_crop("Cassava") == "Cassava"
+
+    def test_an_unknown_crop_raises(self):
+        from data.nutrient_recommendation_guide import resolve_crop
+
+        with pytest.raises(KeyError, match="Nonesuch"):
+            resolve_crop("Nonesuch")
+
+    def test_every_alias_points_at_a_real_canonical_crop(self):
+        from data.nutrient_recommendation_guide import CANONICAL_CROPS, CROP_ALIASES
+
+        for alias, canonical in CROP_ALIASES.items():
+            assert canonical in CANONICAL_CROPS, alias
+
+    def test_no_alias_shadows_a_canonical_crop(self):
+        from data.nutrient_recommendation_guide import CANONICAL_CROPS, CROP_ALIASES
+
+        assert not (set(CROP_ALIASES) & set(CANONICAL_CROPS))
+
+    def test_crops_exposes_canonical_names_and_aliases(self):
+        from data.nutrient_recommendation_guide import CANONICAL_CROPS, CROPS, CROP_ALIASES
+
+        assert set(CROPS) == set(CANONICAL_CROPS) | set(CROP_ALIASES)
+
+    def test_nutrient_requirements_accepts_an_alias(self):
+        from data.nutrient_recommendation_guide import CROP_ALIASES, nutrient_requirements
+
+        if not CROP_ALIASES:
+            pytest.skip("no aliases registered yet")
+        alias, canonical = next(iter(CROP_ALIASES.items()))
+        assert nutrient_requirements(alias, 2.5, 15.0, 0.3) == \
+               nutrient_requirements(canonical, 2.5, 15.0, 0.3)

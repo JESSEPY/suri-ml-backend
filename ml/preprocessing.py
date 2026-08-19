@@ -16,7 +16,9 @@ from sklearn.impute import SimpleImputer
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, OrdinalEncoder, StandardScaler
 
-from data.nutrient_recommendation_guide import CROPS, RICE_CULTIVATION_METHODS, BEARING_AGE_BAND, GUIDE_ROWS
+from data.nutrient_recommendation_guide import (
+    CANONICAL_CROPS, RICE_CULTIVATION_METHODS, BEARING_AGE_BAND, GUIDE_ROWS, VARIETIES_BY_CROP,
+)
 from ml.remarks import K_ORDER, OM_ORDER, P_ORDER, PH_ORDER
 
 CONTINUOUS = [
@@ -38,7 +40,11 @@ DATA_SOURCES = ["iot", "lab", "stk"]
 # "None" (the string, not Python None) covers every crop/row that doesn't
 # track this axis. See data/nutrient_recommendation_guide.py for how each
 # is resolved from a request before it ever reaches this layer.
-VARIETIES = ["None", "Hybrid", "Inbred", "OPV"]
+# Derived, not restated: a crop whose guide rows split on variety must have
+# that variety in the encoder's vocabulary or transform() raises at serve time.
+VARIETIES = ["None"] + sorted({
+    variety for varieties in VARIETIES_BY_CROP.values() for variety in varieties
+})
 CULTIVATION_METHODS = ["None", *RICE_CULTIVATION_METHODS]
 AGE_BANDS = ["None"] + sorted({
     key.split("|", 1)[1] for key in GUIDE_ROWS if key.split("|", 1)[0] in BEARING_AGE_BAND
@@ -68,7 +74,7 @@ def build_preprocessor() -> ColumnTransformer:
     # real information. A farmer acting on that could over- or
     # under-fertilize a real field.
     nominal = OneHotEncoder(
-        categories=[CROPS, VARIETIES, CULTIVATION_METHODS, AGE_BANDS, DATA_SOURCES],
+        categories=[CANONICAL_CROPS, VARIETIES, CULTIVATION_METHODS, AGE_BANDS, DATA_SOURCES],
         handle_unknown="error",
         sparse_output=False,
     )

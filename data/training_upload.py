@@ -19,7 +19,7 @@ from dataclasses import dataclass
 import openpyxl
 
 from data.nutrient_recommendation_guide import (
-    CROPS, k_cmol_to_ppm, resolve_age_band, resolve_cultivation_method,
+    CROPS, k_cmol_to_ppm, resolve_age_band, resolve_crop, resolve_cultivation_method,
     resolve_variety, target_unit_for_crop,
 )
 from ml.agronomy import nutrient_requirements, total_nitrogen_from_om
@@ -190,9 +190,10 @@ def build_training_row(raw: dict) -> dict:
     """Turn one validated raw template row into a full ml_soil_training_data
     row. Raises ValueError/KeyError for anything unusable -- validate_rows()
     is what turns those into per-row rejection reasons."""
-    crop = _text(raw, "crop")
-    if crop not in CROPS:
-        raise ValueError(f"Unknown crop {crop!r}. Valid crops: {', '.join(CROPS)}")
+    requested = _text(raw, "crop")
+    if requested not in CROPS:
+        raise ValueError(f"Unknown crop {requested!r}. Valid crops: {', '.join(CROPS)}")
+    crop = resolve_crop(requested)
 
     ph = _number(raw, "ph", required=True)
     om = _number(raw, "organic_matter_pct", required=True)

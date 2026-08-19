@@ -289,3 +289,19 @@ class TestLoggingIsNonFatal:
             raise RuntimeError("supabase unreachable")
         monkeypatch.setattr(service, "log_prediction", explode)
         assert client.post("/predict", json=SAMPLE_PAYLOAD).status_code == 200
+
+
+class TestAliasCrops:
+    def test_an_alias_crop_predicts_identically_to_its_canonical_crop(self, client):
+        from data.nutrient_recommendation_guide import CROP_ALIASES
+
+        if not CROP_ALIASES:
+            pytest.skip("no aliases registered yet")
+        alias, canonical = next(iter(CROP_ALIASES.items()))
+
+        alias_body = client.post("/predict", json={**SAMPLE_PAYLOAD, "crop": alias}).json()
+        canonical_body = client.post("/predict", json={**SAMPLE_PAYLOAD, "crop": canonical}).json()
+
+        assert alias_body["target_n"] == canonical_body["target_n"]
+        assert alias_body["target_p2o5"] == canonical_body["target_p2o5"]
+        assert alias_body["target_k2o"] == canonical_body["target_k2o"]
