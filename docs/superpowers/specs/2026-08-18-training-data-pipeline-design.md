@@ -174,7 +174,10 @@ currently-loaded model.
 - MAE/R² per target, overall + per crop + per `data_source` (existing `ml/train.py` output).
 - `DummyRegressor` baseline comparison per target, with a clear pass/fail flag if the new model
   fails to beat it on any target.
-- The SCC-417 golden-record check (§10.3 of the original spec), pass/fail + delta.
+- (No golden-record check: the SCC-417/Sorghum fixture was retired when the BSWM
+  guide-table lookup replaced the old baseline+formula approach —
+  `tests/test_train.py::test_no_golden_test_key` asserts its absence. The dummy
+  baseline plus the vs-current diff are the review gate.)
 - **New**: a diff against the metrics of whichever version is currently `is_current` in the
   registry (§5) — same metrics, side by side, so "is this actually better" is answered on-screen.
 
