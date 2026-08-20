@@ -568,6 +568,7 @@ def model_confidence() -> dict:
     to a retrain job that just finished, so a dashboard can show it at rest."""
     bundle = model_state.snapshot()
     by_crop_metrics = bundle["metadata"].get("metrics", {}).get("by_crop", {})
+    coverage_metrics = bundle["metadata"].get("metrics", {}).get("crop_coverage", {})
 
     by_crop = {}
     for crop in sorted(trained_crops(bundle)):
@@ -582,6 +583,9 @@ def model_confidence() -> dict:
                 for key in _TARGET_KEYS
                 if key in by_crop_metrics[crop]
             },
+            # None for an artifact trained before crop_coverage existed --
+            # same nullable-until-retrained pattern as by_crop's own "n".
+            "coverage": coverage_metrics.get(crop),
         }
 
     return {"version": bundle["version"], "by_crop": by_crop}

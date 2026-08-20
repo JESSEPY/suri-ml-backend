@@ -119,6 +119,24 @@ def evaluate(model, X, y, sources, crops, X_train, y_train) -> dict:
     }
 
 
+def crop_coverage(train_df: pd.DataFrame, val_df: pd.DataFrame, test_df: pd.DataFrame) -> dict:
+    """Per-crop train/val/test row counts. by_crop's own "n" (evaluate()'s
+    test-set count) only shows the held-out slice a crop's tier is built
+    on; this is the rest of the picture -- how much real data that crop has
+    overall, and how it split three ways -- for the admin Confidence view."""
+    all_crops = set(train_df.crop) | set(val_df.crop) | set(test_df.crop)
+    coverage = {}
+    for crop in all_crops:
+        train_n = int((train_df.crop == crop).sum())
+        val_n = int((val_df.crop == crop).sum())
+        test_n = int((test_df.crop == crop).sum())
+        coverage[str(crop)] = {
+            "train": train_n, "val": val_n, "test": test_n,
+            "total": train_n + val_n + test_n,
+        }
+    return coverage
+
+
 def train(frame: pd.DataFrame, output_dir: str | None = None, seed: int = RANDOM_SEED) -> dict:
     version = datetime.now(timezone.utc).strftime("%Y-%m-%d-%H%M%S")
     output_dir = output_dir or os.path.join(ARTIFACT_ROOT, version)
@@ -140,6 +158,7 @@ def train(frame: pd.DataFrame, output_dir: str | None = None, seed: int = RANDOM
         test_df.data_source.to_numpy(), test_df.crop.to_numpy(),
         X_train, y_train,
     )
+    metrics["crop_coverage"] = crop_coverage(train_df, val_df, test_df)
 
     metadata = {
         "version": version,

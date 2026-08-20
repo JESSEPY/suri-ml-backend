@@ -265,6 +265,19 @@ class TestModelConfidenceEndpoint:
             assert "r2" in target_metrics
             assert "mean_actual" in target_metrics
 
+    def test_includes_coverage_when_the_artifact_has_it(self, client):
+        """coverage is None for an artifact trained before crop_coverage
+        existed (same nullable-until-retrained pattern as by_crop's "n") --
+        every crop entry still carries the key so the frontend has one
+        consistent shape to check, retrained or not."""
+        body = client.get("/model/confidence").json()
+        for crop_entry in body["by_crop"].values():
+            assert "coverage" in crop_entry
+            coverage = crop_entry["coverage"]
+            if coverage is not None:
+                assert set(coverage.keys()) == {"train", "val", "test", "total"}
+                assert coverage["total"] == coverage["train"] + coverage["val"] + coverage["test"]
+
     def test_a_crop_with_very_few_held_out_rows_is_forced_to_limited(self):
         """Reproduces the real case that motivated this: Lettuce showed
         "High confidence * 89%" on 3 held-out rows. A flattering error from

@@ -140,6 +140,31 @@ class TestTrain:
                 assert isinstance(target_metrics["n"], int)
                 assert target_metrics["n"] > 0
 
+    def test_reports_train_val_test_split_sizes_per_crop(self, result):
+        """metadata["split_sizes"] is overall-only -- the admin Confidence
+        view needs a per-crop breakdown too, so an admin can see a crop's
+        real total row count (train+val+test) next to the much smaller
+        held-out test count its tier is actually built on."""
+        metadata, _ = result
+        coverage = metadata["metrics"]["crop_coverage"]
+        # crop_coverage covers every crop with ANY real data (train, val, or
+        # test); by_crop only covers crops that happened to land in the test
+        # split, which can be a strict subset -- a crop with rows only in
+        # train/val (no test rows at all) has no tier, but still has real
+        # data worth showing coverage for.
+        assert set(coverage.keys()) >= set(metadata["metrics"]["by_crop"].keys())
+        for crop, counts in coverage.items():
+            assert set(counts.keys()) == {"train", "val", "test", "total"}
+            for key in ("train", "val", "test", "total"):
+                assert isinstance(counts[key], int)
+            assert counts["total"] == counts["train"] + counts["val"] + counts["test"]
+            # Where a crop has a tier at all, by_crop's own "n" (evaluate()'s
+            # test-set count) must agree with crop_coverage's "test" -- same
+            # number, two different views.
+            if crop in metadata["metrics"]["by_crop"]:
+                any_target = next(iter(metadata["metrics"]["by_crop"][crop].values()))
+                assert counts["test"] == any_target["n"]
+
     def test_beats_the_mean_baseline_on_every_target(self, result):
         metadata, _ = result
         for target, scores in metadata["metrics"]["overall"].items():
