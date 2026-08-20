@@ -386,3 +386,44 @@ class TestVegetableVariants:
     ])
     def test_variant_resolves(self, text, expected):
         assert normalize_crop(text) == expected
+
+
+class TestCondimentRootcropLegumeVariants:
+    @pytest.mark.parametrize("text,expected", [
+        ("Sugarcane", ("Sugarcane", None)),
+        ("Onions", ("Onion", None)),
+        ("Onion", ("Onion", None)),
+        ("Sibuyas", ("Onion", None)),
+        ("Spring Onion", ("Onion", "Spring")),
+        ("Spring Onions", ("Onion", "Spring")),
+        ("Green Onion", ("Onion", "Spring")),
+        ("Ginger", ("Ginger", None)),
+        ("Gabi", ("Gabi", None)),
+        ("Ube", ("Gabi", None)),
+        ("Ubi", ("Gabi", None)),
+        ("Ube Kinampay", ("Gabi", None)),
+        ("Kamote", ("Cassava", None)),
+        ("Sweet Potato", ("Cassava", None)),
+        ("Beans", ("Beans", None)),
+        ("String Beans", ("Beans", None)),
+        ("Baguio Beans", ("Beans", None)),
+        ("Mung Beans", ("Peanut", None)),
+        ("Mungbean", ("Peanut", None)),
+        ("Sili Haba", ("Garlic", None)),
+        ("Sili Labuyo", ("Garlic", None)),
+        ("Sili Espada", ("Garlic", None)),
+        ("Sili", ("Garlic", None)),
+        ("Sili Atsal", ("Garlic", None)),
+        ("Finger Pepper", ("Garlic", None)),
+        ("Hot Pepper", ("Garlic", None)),
+        ("Green Chili", ("Garlic", None)),
+    ])
+    def test_variant_resolves(self, text, expected):
+        assert normalize_crop(text) == expected
+
+    def test_bell_pepper_is_not_mapped(self):
+        """Botanically distinct from the guide's Chili Pepper/Garlic
+        grouping -- deliberately excluded, not force-fit. See the plan's
+        'Deliberately Excluded' table."""
+        assert normalize_crop("Bell Pepper") is None
+        assert normalize_crop("Sweet Pepper") is None

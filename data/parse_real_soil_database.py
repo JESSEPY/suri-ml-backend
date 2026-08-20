@@ -79,6 +79,39 @@ CROP_VARIETY_MAP: dict[str, tuple[str, str | None]] = {
     "cucumber": ("Cucumber", None),
     "pipino": ("Cucumber", None),
     "watermelon": ("Cucumber", None),
+    # --- Condiment / rootcrop / legume / sugarcane real-world variants ---
+    "sugarcane": ("Sugarcane", None),
+    "onions": ("Onion", None),
+    "onion": ("Onion", None),
+    "sibuyas": ("Onion", None),
+    "spring onion": ("Onion", "Spring"),
+    "spring onions": ("Onion", "Spring"),
+    "green onion": ("Onion", "Spring"),
+    "ginger": ("Ginger", None),
+    "gabi": ("Gabi", None),
+    "ube": ("Gabi", None),
+    "ubi": ("Gabi", None),
+    "ube kinampay": ("Gabi", None),
+    "kamote": ("Cassava", None),
+    "sweet potato": ("Cassava", None),
+    "beans": ("Beans", None),
+    "string beans": ("Beans", None),
+    "baguio beans": ("Beans", None),
+    "mung beans": ("Peanut", None),
+    "mungbean": ("Peanut", None),
+    # Guide co-lists "Garlic/ Chili Pepper" on one row (CROP_ALIASES already
+    # has "Chili Pepper" -> Garlic); real labels overwhelmingly use "Sili"
+    # (Filipino for chili) rather than the English name. Bell/sweet pepper
+    # is botanically distinct and deliberately NOT mapped here -- no guide
+    # entry to route it to.
+    "sili haba": ("Garlic", None),
+    "sili labuyo": ("Garlic", None),
+    "sili espada": ("Garlic", None),
+    "sili": ("Garlic", None),
+    "sili atsal": ("Garlic", None),
+    "finger pepper": ("Garlic", None),
+    "hot pepper": ("Garlic", None),
+    "green chili": ("Garlic", None),
 }
 
 _LAB_CODE_DIGITS = re.compile(r"\d+")
