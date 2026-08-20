@@ -32,7 +32,7 @@ from data.training_upload import (
 from ml.agronomy import total_nitrogen_from_om
 from ml.confidence import (
     DISAGREEMENT_DOWNGRADE_THRESHOLD, TIER_PCT_CEILING,
-    confidence_from_metrics, downgrade_tier,
+    apply_sample_size_floor, confidence_from_metrics, downgrade_tier,
 )
 from ml.preprocessing import FEATURE_COLUMNS
 from ml.recipes import plan_applications
@@ -305,19 +305,25 @@ def trained_crops(bundle: dict) -> set[str]:
 
 
 def _historical_confidence(bundle: dict, crop: str) -> Confidence | None:
-    """Tier 1 only: this crop's historical held-out accuracy for the worst
+    """Tier 1: this crop's historical held-out accuracy for the worst
     (lowest-confidence) of the three targets, since a report shows all three
-    together and the weakest one is what should drive trust. No Tier 2
-    (ensemble-disagreement) check -- that needs a specific prediction's X, so
-    this is what GET /model/confidence uses to show a crop's confidence
-    independent of any single request. See
+    together and the weakest one is what should drive trust. Tier 3: a
+    target's tier is floored to Limited when its held-out sample count is
+    too small to trust the error at all, regardless of how good it looks --
+    see ml.confidence's module docstring for the Lettuce/Garlic cases that
+    motivated this. No Tier 2 (ensemble-disagreement) check here -- that
+    needs a specific prediction's X, so this is what GET /model/confidence
+    uses to show a crop's confidence independent of any single request. See
     docs/superpowers/specs/2026-08-12-ml-prediction-confidence-design.md."""
     crop_metrics = bundle["metadata"].get("metrics", {}).get("by_crop", {}).get(crop)
     if not crop_metrics:
         return None
 
     tiers_and_pcts = [
-        confidence_from_metrics(crop_metrics[key]["mae"], crop_metrics[key]["mean_actual"])
+        apply_sample_size_floor(
+            *confidence_from_metrics(crop_metrics[key]["mae"], crop_metrics[key]["mean_actual"]),
+            crop_metrics[key].get("n"),
+        )
         for key in _TARGET_KEYS
         if key in crop_metrics
     ]

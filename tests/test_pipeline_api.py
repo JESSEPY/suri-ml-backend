@@ -265,6 +265,28 @@ class TestModelConfidenceEndpoint:
             assert "r2" in target_metrics
             assert "mean_actual" in target_metrics
 
+    def test_a_crop_with_very_few_held_out_rows_is_forced_to_limited(self):
+        """Reproduces the real case that motivated this: Lettuce showed
+        "High confidence * 89%" on 3 held-out rows. A flattering error from
+        1-3 rows proves nothing about generalization -- calling
+        _historical_confidence directly (rather than through the endpoint)
+        so this doesn't depend on which crops the live artifact happens to
+        have thin data for right now."""
+        bundle = {"metadata": {"metrics": {"by_crop": {"Lettuce": {
+            "target_n": {"mae": 5.96, "mean_actual": 56.67, "n": 3},
+            "target_p2o5": {"mae": 2.07, "mean_actual": 26.67, "n": 3},
+            "target_k2o": {"mae": 0.99, "mean_actual": 30.0, "n": 3},
+        }}}}}
+        confidence = service._historical_confidence(bundle, "Lettuce")
+        assert confidence.tier == "limited"
+
+    def test_a_crop_with_plenty_of_held_out_rows_is_not_forced(self):
+        bundle = {"metadata": {"metrics": {"by_crop": {"Rice": {
+            "target_n": {"mae": 3.41, "mean_actual": 57.47, "n": 239},
+        }}}}}
+        confidence = service._historical_confidence(bundle, "Rice")
+        assert confidence.tier == "high"
+
 
 class TestPromoteRegistersBeforePromoting:
     """set_current() is an UPDATE ... WHERE version = $1. Promoting a version
