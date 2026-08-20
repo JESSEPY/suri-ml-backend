@@ -92,6 +92,18 @@ class TestTrain:
         assert "classification_metrics" not in metadata
         assert "recipe_vocabulary" not in metadata
 
+    def test_metrics_are_strict_json_serializable(self, result):
+        """r2_score is undefined (NaN) for a crop/source whose held-out
+        split has fewer than 2 samples or zero target variance -- this
+        200-row fixture spreads across 81 crops, so several crops hit this
+        every run. A raw NaN survives Python's own permissive json.dumps
+        (it just prints the invalid token `NaN`) but breaks the moment
+        registry.record_version() tries to upsert it to Supabase, which
+        rejects it with "Out of range float values are not JSON compliant:
+        nan". allow_nan=False here reproduces that failure locally."""
+        metadata, _ = result
+        json.dumps(metadata["metrics"], allow_nan=False)
+
     def test_reports_metrics_per_data_source(self, result):
         metadata, _ = result
         assert set(metadata["metrics"]["by_source"].keys()) == {"lab"}

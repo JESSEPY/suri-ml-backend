@@ -72,6 +72,19 @@ def cv_weights(X, y, groups, n_splits: int = 5) -> list[tuple[float, float]]:
     return weights
 
 
+def _json_safe_r2(y_true, y_pred) -> float | None:
+    """r2_score is mathematically undefined (NaN) for a group with fewer
+    than 2 samples or zero target variance in its held-out split -- a raw
+    NaN survives Python's own permissive json.dumps but breaks the moment
+    registry.record_version() tries to upsert it to Supabase, which raises
+    "Out of range float values are not JSON compliant: nan". None is the
+    honest "not computable here" value every downstream consumer already
+    expects (main.py's Confidence never reads r2; the admin UI's confidence
+    table already renders a null r2 as "—")."""
+    score = r2_score(y_true, y_pred)
+    return None if np.isnan(score) else float(score)
+
+
 def evaluate(model, X, y, sources, crops, X_train, y_train) -> dict:
     predicted = model.predict(X)
 
@@ -80,7 +93,7 @@ def evaluate(model, X, y, sources, crops, X_train, y_train) -> dict:
         dummy = DummyRegressor(strategy="mean").fit(X_train, y_train[:, index])
         overall[name] = {
             "mae": float(mean_absolute_error(y[:, index], predicted[:, index])),
-            "r2": float(r2_score(y[:, index], predicted[:, index])),
+            "r2": _json_safe_r2(y[:, index], predicted[:, index]),
             "dummy_mae": float(mean_absolute_error(y[:, index], dummy.predict(X))),
         }
 
@@ -91,7 +104,7 @@ def evaluate(model, X, y, sources, crops, X_train, y_train) -> dict:
             result[str(label)] = {
                 name: {
                     "mae": float(mean_absolute_error(y[mask, index], predicted[mask, index])),
-                    "r2": float(r2_score(y[mask, index], predicted[mask, index])),
+                    "r2": _json_safe_r2(y[mask, index], predicted[mask, index]),
                     "mean_actual": float(np.mean(y[mask, index])),
                     "n": int(mask.sum()),
                 }
