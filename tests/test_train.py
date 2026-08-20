@@ -59,6 +59,26 @@ class TestCvWeights:
             assert xgb_weight + krr_weight == pytest.approx(1.0)
 
 
+class TestTrainWithNoData:
+    """A full reset (every row cleared from ml_soil_training_data, ready to
+    retrain from scratch) or simply clicking "Train first model" before
+    uploading anything both reach train() with zero rows. Before this,
+    grouped_split() raised a bare KeyError('laboratory_code') -- the empty
+    frame _load_frame() returns has no columns at all, so indexing by
+    GROUP_COLUMN fails -- which the admin UI's error-message heuristic
+    then misread as an upload-format problem ("Training data has a problem
+    with 'laboratory_code'"), not "there's no data yet."""
+
+    def test_raises_a_clear_error_instead_of_a_bare_keyerror(self):
+        # Matches _load_frame()'s real empty-table shape (pd.DataFrame([]) on
+        # zero Supabase rows has no columns at all, not just no rows) rather
+        # than a same-schema-but-empty frame, which wouldn't have reproduced
+        # the original KeyError('laboratory_code') this guards against.
+        empty = pd.DataFrame([])
+        with pytest.raises(ValueError, match="No training data"):
+            train(empty)
+
+
 class TestTrain:
     @pytest.fixture(scope="class")
     def result(self, tmp_path_factory):

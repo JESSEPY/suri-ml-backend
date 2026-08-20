@@ -138,6 +138,19 @@ def crop_coverage(train_df: pd.DataFrame, val_df: pd.DataFrame, test_df: pd.Data
 
 
 def train(frame: pd.DataFrame, output_dir: str | None = None, seed: int = RANDOM_SEED) -> dict:
+    if len(frame) == 0:
+        # _load_frame() on zero Supabase rows returns a DataFrame with no
+        # columns at all (not just no rows), so grouped_split()'s very next
+        # line -- frame[GROUP_COLUMN] -- would otherwise raise a bare
+        # KeyError('laboratory_code'). The admin UI's error-message
+        # heuristic (main.py's friendlyTrainingError equivalent) reads that
+        # as "your upload has a problem with this column," which is wrong:
+        # the real problem is there's no training data committed at all.
+        raise ValueError(
+            "No training data available. Upload and commit soil-test data "
+            "before training."
+        )
+
     version = datetime.now(timezone.utc).strftime("%Y-%m-%d-%H%M%S")
     output_dir = output_dir or os.path.join(ARTIFACT_ROOT, version)
     os.makedirs(output_dir, exist_ok=True)
