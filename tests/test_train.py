@@ -116,6 +116,18 @@ class TestTrain:
                 assert "mean_actual" in target_metrics
                 assert isinstance(target_metrics["mean_actual"], float)
 
+    def test_reports_sample_count_per_crop_target(self, result):
+        """Needed so a persistent per-crop confidence view (main.py's
+        GET /model/confidence) can show how many rows a crop's tier is
+        actually based on -- a high R2 on 5 rows and a high R2 on 500 rows
+        must not render identically."""
+        metadata, _ = result
+        for crop, crop_metrics in metadata["metrics"]["by_crop"].items():
+            for target_metrics in crop_metrics.values():
+                assert "n" in target_metrics
+                assert isinstance(target_metrics["n"], int)
+                assert target_metrics["n"] > 0
+
     def test_beats_the_mean_baseline_on_every_target(self, result):
         metadata, _ = result
         for target, scores in metadata["metrics"]["overall"].items():

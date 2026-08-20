@@ -233,6 +233,39 @@ class TestModelVersionEndpoints:
         assert client.post("/model/promote", json={"version": version}).status_code == 422
 
 
+class TestModelConfidenceEndpoint:
+    """Persistent, always-available per-crop confidence -- unlike /predict's
+    confidence field, this doesn't need a specific request's inputs, so it
+    reads the live bundle's held-out metrics only (no ensemble-disagreement
+    Tier 2 check, which needs a real X)."""
+
+    def test_reports_a_tier_and_pct_per_trained_crop(self, client):
+        live = model_state.snapshot()
+        trained = set(live["metadata"].get("metrics", {}).get("by_crop", {}))
+
+        body = client.get("/model/confidence").json()
+
+        assert body["version"] == live["version"]
+        assert set(body["by_crop"].keys()) == trained
+        for crop_entry in body["by_crop"].values():
+            assert crop_entry["tier"] in {"high", "fair", "limited"}
+            assert 5 <= crop_entry["pct"] <= 100
+
+    def test_includes_the_raw_per_target_metrics_for_the_detail_view(self, client):
+        live = model_state.snapshot()
+        trained = set(live["metadata"].get("metrics", {}).get("by_crop", {}))
+        any_crop = next(iter(trained))
+
+        body = client.get("/model/confidence").json()
+
+        targets = body["by_crop"][any_crop]["targets"]
+        assert set(targets.keys()) == {"target_n", "target_p2o5", "target_k2o"}
+        for target_metrics in targets.values():
+            assert "mae" in target_metrics
+            assert "r2" in target_metrics
+            assert "mean_actual" in target_metrics
+
+
 class TestPromoteRegistersBeforePromoting:
     """set_current() is an UPDATE ... WHERE version = $1. Promoting a version
     the registry never recorded -- the bootstrap artifact pinned via

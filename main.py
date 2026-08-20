@@ -304,12 +304,13 @@ def trained_crops(bundle: dict) -> set[str]:
     return set(bundle["metadata"].get("metrics", {}).get("by_crop", {}))
 
 
-def _compute_confidence(bundle: dict, crop: str, X) -> Confidence | None:
-    """Tier 1: this crop's historical held-out accuracy for the worst
-    (lowest-confidence) of the three targets, since a report shows all
-    three together and the weakest one is what should drive trust. Tier 2:
-    if the two sub-models disagree a lot on THIS specific input, downgrade
-    one level regardless of the crop's historical track record -- see
+def _historical_confidence(bundle: dict, crop: str) -> Confidence | None:
+    """Tier 1 only: this crop's historical held-out accuracy for the worst
+    (lowest-confidence) of the three targets, since a report shows all three
+    together and the weakest one is what should drive trust. No Tier 2
+    (ensemble-disagreement) check -- that needs a specific prediction's X, so
+    this is what GET /model/confidence uses to show a crop's confidence
+    independent of any single request. See
     docs/superpowers/specs/2026-08-12-ml-prediction-confidence-design.md."""
     crop_metrics = bundle["metadata"].get("metrics", {}).get("by_crop", {}).get(crop)
     if not crop_metrics:
@@ -325,6 +326,18 @@ def _compute_confidence(bundle: dict, crop: str, X) -> Confidence | None:
 
     tier_rank = {"high": 2, "fair": 1, "limited": 0}
     worst_tier, worst_pct = min(tiers_and_pcts, key=lambda pair: tier_rank[pair[0]])
+    return Confidence(tier=worst_tier, pct=worst_pct)
+
+
+def _compute_confidence(bundle: dict, crop: str, X) -> Confidence | None:
+    """Tier 1 (see _historical_confidence), then Tier 2: if the two
+    sub-models disagree a lot on THIS specific input, downgrade one level
+    regardless of the crop's historical track record -- see
+    docs/superpowers/specs/2026-08-12-ml-prediction-confidence-design.md."""
+    historical = _historical_confidence(bundle, crop)
+    if historical is None:
+        return None
+    worst_tier, worst_pct = historical.tier, historical.pct
 
     max_disagreement = 0.0
     for voter in bundle["regressor"].models_:
@@ -540,6 +553,32 @@ def model_versions() -> dict:
         "versions": registry.list_versions(),
         "on_disk": model_state.available_versions(ARTIFACT_ROOT),
     }
+
+
+@app.get("/model/confidence", dependencies=[Depends(require_api_key)])
+def model_confidence() -> dict:
+    """Always-available per-crop confidence for the live model -- unlike
+    /predict's confidence field, this isn't tied to a specific prediction or
+    to a retrain job that just finished, so a dashboard can show it at rest."""
+    bundle = model_state.snapshot()
+    by_crop_metrics = bundle["metadata"].get("metrics", {}).get("by_crop", {})
+
+    by_crop = {}
+    for crop in sorted(trained_crops(bundle)):
+        confidence = _historical_confidence(bundle, crop)
+        if confidence is None:
+            continue
+        by_crop[crop] = {
+            "tier": confidence.tier,
+            "pct": confidence.pct,
+            "targets": {
+                key: by_crop_metrics[crop][key]
+                for key in _TARGET_KEYS
+                if key in by_crop_metrics[crop]
+            },
+        }
+
+    return {"version": bundle["version"], "by_crop": by_crop}
 
 
 @app.post("/model/promote", dependencies=[Depends(require_api_key)])
