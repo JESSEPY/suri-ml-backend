@@ -26,19 +26,16 @@ __pycache__/
 # falls back to "newest on disk" and auto-promotes — which this project
 # treats as a human decision, never a side effect of a restart.
 #
-# 2026-08-06-055755 — pre-crop-expansion (9-crop encoder vocabulary), what
-#   the registry currently marks current.
-# 2026-08-19-160748 — retrained against the 35-crop vocabulary (Task 9 of
-#   docs/superpowers/plans/2026-08-18-crop-coverage-expansion.md); on disk and
-#   promotable, but not live until a human promotes it.
+# Reset to a clean slate on 2026-08-20: every prior version (registry,
+# Supabase Storage, local disk, and the training-data table) was deliberately
+# cleared, including the two directories previously pinned here. No artifact
+# is pinned right now, which means boot_version() has nothing to load and
+# main.py will refuse to start (see its RuntimeError) until the first
+# retrain from a freshly-uploaded training set produces one.
 #
 # If you retrain and want the new version deployed, add its pinned path here,
 # commit the new (small) artifact directory, and promote it explicitly.
 ml/artifacts/*
-!ml/artifacts/2026-08-06-055755/
-!ml/artifacts/2026-08-06-055755/**
-!ml/artifacts/2026-08-19-160748/
-!ml/artifacts/2026-08-19-160748/**
 
 # Virtual environments
 .venv/
