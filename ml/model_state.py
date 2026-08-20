@@ -91,17 +91,33 @@ def available_versions(artifact_root: str) -> list[str]:
     )
 
 
-def _probe_frame() -> pd.DataFrame:
-    """One syntactically valid row, built from the first supported crop, used
-    only to prove a candidate bundle can actually transform input before it is
-    allowed to serve traffic."""
+def _probe_frame(bundle: dict) -> pd.DataFrame:
+    """One syntactically valid row, used only to prove a candidate bundle can
+    actually transform input before it is allowed to serve traffic.
+
+    The crop comes from the bundle's OWN by_crop metrics, not from CROPS[0].
+    CROPS[0] is whatever sorts first in the current code (today "Alugbati"),
+    which for any artifact predating a crop-list expansion is a category its
+    encoder was never fit against -- so verify_bundle() would reject a
+    perfectly serviceable older artifact and break the rollback path the
+    promotion registry exists to provide. It is not the probe's job to test
+    coverage of the newest crop; main.py::predict() already refuses crops
+    absent from a bundle's by_crop metrics with a 422, so a crop that IS in
+    those metrics is exactly the kind of row this artifact will really see.
+
+    Sorted rather than "first key" so the probe is reproducible regardless of
+    the order train.py happened to write metadata.json in. CROPS[0] remains
+    the fallback for an artifact carrying no metrics at all -- the same
+    "degrade gracefully when metadata is empty" stance as main.py's
+    `known and canonical not in known` guard."""
     from data.nutrient_recommendation_guide import (
         CROPS, resolve_age_band, resolve_cultivation_method, resolve_variety,
     )
     from ml.preprocessing import FEATURE_COLUMNS
     from ml.remarks import derive_k_remark, derive_om_remark, derive_p_remark, derive_ph_remark
 
-    crop = CROPS[0]
+    by_crop = bundle.get("metadata", {}).get("metrics", {}).get("by_crop", {})
+    crop = next(iter(sorted(by_crop)), None) or CROPS[0]
     row = {
         "ph": 6.5, "organic_matter_pct": 2.5, "total_nitrogen_pct": 0.125,
         "phosphorus_ppm": 15.0, "potassium_cmol_kg": 0.3,
@@ -125,7 +141,7 @@ def verify_bundle(bundle: dict) -> None:
     raises the moment it sees a real row -- which would turn every /predict
     into a 422 if it were promoted. Catch that here, before the swap."""
     try:
-        transformed = bundle["preprocessor"].transform(_probe_frame())
+        transformed = bundle["preprocessor"].transform(_probe_frame(bundle))
         bundle["regressor"].predict(transformed)
     except Exception as error:
         raise ValueError(

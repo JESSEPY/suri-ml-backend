@@ -130,14 +130,15 @@ class TestVerifyBundle:
     def test_the_newest_artifact_s_encoder_vocabulary_matches_the_code(self):
         """Artifact/code drift, asserted directly instead of by luck.
 
-        verify_bundle()'s probe row is built from CROPS[0] alone, so it only
-        notices a vocabulary change when the crop that happens to sort first
-        is the one that moved. Today that is "Alugbati", which is why the
-        crop-coverage expansion's drift was caught at all -- a crop added
-        further down the list would have sailed through and reached a live
-        artifact, exactly the failure Task 9 of
+        verify_bundle()'s probe row is a single crop, so on its own it can only
+        notice a vocabulary change when that one crop is the one that moved --
+        and deliberately so: the probe now picks a crop the artifact was
+        actually trained on, precisely so an older, narrower artifact stays
+        promotable. Nothing in verify_bundle() therefore proves a freshly
+        trained artifact covers the *whole* current crop list, which is the
+        failure Task 9 of
         docs/superpowers/plans/2026-08-18-crop-coverage-expansion.md had to
-        repair by hand.
+        repair by hand. This test proves it.
 
         Anchored on the newest complete artifact directory rather than
         model_state.snapshot(): the newest directory is what a retrain just
@@ -155,3 +156,44 @@ class TestVerifyBundle:
         encoder = bundle["preprocessor"].named_transformers_["nom"]
 
         assert list(encoder.categories_[0]) == CANONICAL_CROPS
+
+    def test_accepts_a_pre_expansion_artifact_it_can_still_serve(self):
+        """Regression: the promotion gate must not reject the rollback target.
+
+        _probe_frame() used to hard-code CROPS[0]. After the crop-coverage
+        expansion that became "Alugbati", a crop no artifact trained before the
+        expansion has ever seen -- so verify_bundle() rejected 2026-08-06-055755
+        outright with "Found unknown categories ['Alugbati']", even though that
+        version is what the shared registry marks current and is exactly what a
+        rollback would promote. Real artifact, real failure, no fixture."""
+        from ml.train import ARTIFACT_ROOT
+
+        bundle = model_state.load_bundle("2026-08-06-055755", ARTIFACT_ROOT)
+
+        model_state.verify_bundle(bundle)
+
+    def test_the_probe_crop_comes_from_the_bundle_s_own_metrics(self):
+        """The mechanism behind the test above, pinned so a future edit can't
+        quietly revert to an arbitrary crop and still look green."""
+        from data.nutrient_recommendation_guide import CROPS
+        from ml.train import ARTIFACT_ROOT
+
+        bundle = model_state.load_bundle("2026-08-06-055755", ARTIFACT_ROOT)
+        trained_on = set(bundle["metadata"]["metrics"]["by_crop"])
+        probe_crop = model_state._probe_frame(bundle)["crop"].iloc[0]
+
+        assert probe_crop in trained_on
+        # Load-bearing: this artifact's metrics genuinely exclude CROPS[0], so
+        # the assertion above would fail under the old hard-coded behaviour.
+        assert CROPS[0] not in trained_on
+
+    def test_falls_back_to_the_first_crop_when_a_bundle_has_no_metrics(self):
+        """An artifact carrying no by_crop metrics at all (hand-built, or from
+        a training run that skipped evaluation) still gets a probe rather than
+        an IndexError -- same degrade-gracefully stance as main.py's
+        `known and canonical not in known` guard."""
+        from data.nutrient_recommendation_guide import CROPS
+
+        frame = model_state._probe_frame({"version": "v1", "metadata": {}})
+
+        assert frame["crop"].iloc[0] == CROPS[0]
