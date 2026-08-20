@@ -42,6 +42,24 @@ CROP_VARIETY_MAP: dict[str, tuple[str, str | None]] = {
     "banana": ("Banana", None),
     "tomato": ("Tomato", None),
     "coconut": ("Coconut", None),
+    # --- Corn / Rice / Sorghum real-world label variants -----------------
+    # "corn tinigib"/"corn tiniguib" need no entry here: they already
+    # resolve via the bare "corn" key's existing prefix match ("corn " is a
+    # leading substring of both) -- confirmed by test before adding this.
+    "sweetcorn": ("Corn", None),
+    "sweet corn": ("Corn", None),
+    "corn hybrid": ("Corn", "Hybrid"),
+    "corn hybrid yellow": ("Corn", "Hybrid"),
+    "sorghum": ("Corn", None),
+    # Guide lists Adlai only on Corn's Hybrid row (Corn /Sorghum/Adlai) --
+    # the crop-coverage-expansion plan deliberately did not register it as
+    # a CROP_ALIASES entry for exactly this reason (a whole-crop alias has
+    # no way to carry "Hybrid" and would wrongly resolve to Native). This
+    # map entry carries the variety explicitly, so it doesn't have that
+    # problem.
+    "adlai": ("Corn", "Hybrid"),
+    "upland rice": ("Rice", None),
+    "rice inbred": ("Rice", "Inbred"),
 }
 
 _LAB_CODE_DIGITS = re.compile(r"\d+")

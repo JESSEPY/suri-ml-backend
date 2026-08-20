@@ -85,10 +85,13 @@ class TestNormalizeCrop:
         assert normalize_crop("   ") is None
 
     def test_unknown_crop_is_rejected(self):
-        """Crops below the real-sample floor (Cabbage/Sorghum/Sugarcane) or
-        not in the 9-crop list at all must not silently pass through."""
-        assert normalize_crop("Sorghum") is None
-        assert normalize_crop("Ampalaya") is None
+        """A crop CROP_VARIETY_MAP has no entry for must not silently pass
+        through. "Nonesuch" can never become real; Sorghum and Ampalaya
+        used to belong here too, back when this system only supported 9
+        crops -- they're now real, recognized crops (see
+        TestCornRiceVariants / TestVegetableVariants), so asserting them
+        rejected here would be testing stale behavior on purpose."""
+        assert normalize_crop("Nonesuch") is None
 
     def test_crop_with_trailing_cultivation_method_text_still_resolves(self):
         """The Crops field is free text that often trails the crop name with
@@ -335,3 +338,26 @@ class TestCropVarietyMapConsistency:
         assert normalize_crop("OPV Corn") == ("Corn", "OPV")
         assert normalize_crop("Hybrid Rice") == ("Rice", "Hybrid")
         assert normalize_crop("Cassava") == ("Cassava", None)
+
+
+class TestCornRiceVariants:
+    @pytest.mark.parametrize("text,expected", [
+        ("sweetcorn", ("Corn", None)),
+        ("Sweet Corn", ("Corn", None)),
+        ("Corn Hybrid", ("Corn", "Hybrid")),
+        ("CORN HYBRID YELLOW", ("Corn", "Hybrid")),
+        ("Corn Tinigib", ("Corn", None)),
+        ("corn tiniguib", ("Corn", None)),
+        ("Sorghum", ("Corn", None)),
+        ("Adlai", ("Corn", "Hybrid")),
+        ("Upland Rice", ("Rice", None)),
+        ("Rice Inbred", ("Rice", "Inbred")),
+    ])
+    def test_variant_resolves(self, text, expected):
+        assert normalize_crop(text) == expected
+
+    def test_upland_rice_cultivation_method_is_still_detected_downstream(self):
+        """normalize_crop only resolves the crop; normalize_cultivation_method
+        runs separately against the same raw text and must still find
+        'upland' regardless of which CROP_VARIETY_MAP key matched."""
+        assert normalize_cultivation_method("Rice", "Upland Rice") == "Upland"
