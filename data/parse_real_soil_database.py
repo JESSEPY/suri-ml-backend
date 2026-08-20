@@ -112,6 +112,15 @@ CROP_VARIETY_MAP: dict[str, tuple[str, str | None]] = {
     "finger pepper": ("Garlic", None),
     "hot pepper": ("Garlic", None),
     "green chili": ("Garlic", None),
+    # --- Tree / plantation crop real-world label variants -----------------
+    # "banana lakatan" needs no entry: already resolves via the existing
+    # bare "banana" key's prefix match (Lakatan is a Banana variety name;
+    # the guide has no Banana variety axis, so the detail is discarded --
+    # same as how the pre-existing map already handles varietyless crops).
+    "calamansi": ("Citrus", None),
+    "lemon": ("Citrus", None),
+    "avocado": ("Avocado", None),
+    "jackfruit": ("Avocado", None),
 }
 
 _LAB_CODE_DIGITS = re.compile(r"\d+")

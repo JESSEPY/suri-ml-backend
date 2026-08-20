@@ -427,3 +427,15 @@ class TestCondimentRootcropLegumeVariants:
         'Deliberately Excluded' table."""
         assert normalize_crop("Bell Pepper") is None
         assert normalize_crop("Sweet Pepper") is None
+
+
+class TestTreeAndPlantationVariants:
+    @pytest.mark.parametrize("text,expected", [
+        ("Calamansi", ("Citrus", None)),
+        ("Lemon", ("Citrus", None)),
+        ("Avocado", ("Avocado", None)),
+        ("Jackfruit", ("Avocado", None)),
+        ("Banana Lakatan", ("Banana", None)),
+    ])
+    def test_variant_resolves(self, text, expected):
+        assert normalize_crop(text) == expected
