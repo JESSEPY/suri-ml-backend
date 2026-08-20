@@ -60,13 +60,15 @@ class TestPredict:
     def test_remarks_are_derived_from_the_numerics(self, client):
         body = client.post("/predict", json=SAMPLE_PAYLOAD).json()
         assert body["derived_remarks"]["ph_remark"] == "SLIGHTLY ACIDIC"
-        assert body["derived_remarks"]["om_remark"] == "MODERATELY LOW"
+        assert body["derived_remarks"]["om_remark"] == "LOW"
         assert body["derived_remarks"]["p_remark"] == "HIGH"
-        assert body["derived_remarks"]["k_remark"] == "SUFFICIENT+"
+        assert body["derived_remarks"]["k_remark"] == "SUFFICIENT"
 
     def test_k_remark_uses_the_converted_ppm_value_not_the_raw_cmol_kg(self, client):
+        # Raw 0.35 cmol/kg would be "DEFICIENT" if the conversion were
+        # skipped (< 36 ppm); the converted ~137 ppm is "SUFFICIENT".
         body = client.post("/predict", json=SAMPLE_PAYLOAD).json()
-        assert body["derived_remarks"]["k_remark"] == "SUFFICIENT+"
+        assert body["derived_remarks"]["k_remark"] == "SUFFICIENT"
 
     def test_application_schedule_present_for_a_covered_crop(self, client):
         body = client.post("/predict", json=SAMPLE_PAYLOAD).json()

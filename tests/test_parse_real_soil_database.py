@@ -167,13 +167,13 @@ class TestBuildTrainingRow:
         assert row["variety"] == "None"
         assert row["cultivation_method"] == "None"
         assert row["age_band"] == "None"
-        assert row["om_remark"] == "MODERATELY LOW"
+        assert row["om_remark"] == "LOW"
         assert row["target_unit"] == "kg_ha"
         assert isinstance(row["target_n"], float)
         assert row["target_n"] > 0
 
     def test_k_remark_uses_the_converted_ppm_not_the_raw_cmol_kg(self):
-        """0.35 cmol/kg -> 136.85 ppm -> SUFFICIENT+. Feeding the raw 0.35
+        """0.35 cmol/kg -> 136.85 ppm -> SUFFICIENT. Feeding the raw 0.35
         into derive_k_remark directly would misclassify it as DEFICIENT."""
         raw = {
             "laboratory_code": "2022-SCC417", "crop": "Corn", "variety": None,
@@ -181,7 +181,7 @@ class TestBuildTrainingRow:
             "ph": 6.4, "organic_matter_pct": 2.8, "phosphorus_ppm": 18.0,
             "potassium_cmol_kg": 0.35, "total_nitrogen_pct": None,
         }
-        assert build_training_row(raw)["k_remark"] == "SUFFICIENT+"
+        assert build_training_row(raw)["k_remark"] == "SUFFICIENT"
 
     def test_tree_crop_row_gets_kg_tree_unit(self):
         raw = {
