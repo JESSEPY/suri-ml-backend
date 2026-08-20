@@ -60,6 +60,25 @@ CROP_VARIETY_MAP: dict[str, tuple[str, str | None]] = {
     "adlai": ("Corn", "Hybrid"),
     "upland rice": ("Rice", None),
     "rice inbred": ("Rice", "Inbred"),
+    # --- Vegetable real-world label variants ------------------------------
+    "lettuce": ("Lettuce", None),
+    "pechay": ("Cabbage", None),
+    "ampalaya": ("Ampalaya", None),
+    "eggplant": ("Eggplant", None),
+    "talong": ("Eggplant", None),
+    "okra": ("Eggplant", None),
+    "sayote": ("Chayote", None),
+    "cabbage": ("Cabbage", None),
+    "red cabbage": ("Cabbage", None),
+    "repolyo": ("Cabbage", None),
+    "squash": ("Squash", None),
+    "cauliflower": ("Cauliflower", None),
+    "carrots": ("Radish", None),
+    "radish": ("Radish", None),
+    "raddish": ("Radish", None),
+    "cucumber": ("Cucumber", None),
+    "pipino": ("Cucumber", None),
+    "watermelon": ("Cucumber", None),
 }
 
 _LAB_CODE_DIGITS = re.compile(r"\d+")

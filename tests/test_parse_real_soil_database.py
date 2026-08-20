@@ -361,3 +361,28 @@ class TestCornRiceVariants:
         runs separately against the same raw text and must still find
         'upland' regardless of which CROP_VARIETY_MAP key matched."""
         assert normalize_cultivation_method("Rice", "Upland Rice") == "Upland"
+
+
+class TestVegetableVariants:
+    @pytest.mark.parametrize("text,expected", [
+        ("Lettuce", ("Lettuce", None)),
+        ("Pechay", ("Cabbage", None)),
+        ("Ampalaya", ("Ampalaya", None)),
+        ("Eggplant", ("Eggplant", None)),
+        ("Talong", ("Eggplant", None)),
+        ("Okra", ("Eggplant", None)),
+        ("Sayote", ("Chayote", None)),
+        ("Cabbage", ("Cabbage", None)),
+        ("Squash", ("Squash", None)),
+        ("Carrots", ("Radish", None)),
+        ("Cauliflower", ("Cauliflower", None)),
+        ("Radish", ("Radish", None)),
+        ("Raddish", ("Radish", None)),
+        ("Cucumber", ("Cucumber", None)),
+        ("Pipino", ("Cucumber", None)),
+        ("Watermelon", ("Cucumber", None)),
+        ("Red Cabbage", ("Cabbage", None)),
+        ("Repolyo", ("Cabbage", None)),
+    ])
+    def test_variant_resolves(self, text, expected):
+        assert normalize_crop(text) == expected
