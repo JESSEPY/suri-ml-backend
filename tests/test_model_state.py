@@ -157,34 +157,53 @@ class TestVerifyBundle:
 
         assert list(encoder.categories_[0]) == CANONICAL_CROPS
 
-    def test_accepts_a_pre_expansion_artifact_it_can_still_serve(self):
+    @pytest.fixture(scope="class")
+    def bundle_missing_crops_0(self, tmp_path_factory):
+        """A synthetic stand-in for the regression this used to pin against a
+        real artifact (2026-08-06-055755, a pre-crop-expansion version that
+        genuinely never trained on CROPS[0] == "Alugbati"). That artifact was
+        deliberately deleted in a full registry/artifact reset -- rebuilt here
+        instead of depending on one specific file surviving forever, same
+        "excludes CROPS[0]" property, hermetic either way."""
+        import joblib
+        from data.nutrient_recommendation_guide import CROPS
+        from ml.train import train
+        from tests.fixtures import sample_training_frame
+
+        frame = sample_training_frame(num_records=200, seed=42)
+        frame = frame[frame["crop"] != CROPS[0]].reset_index(drop=True)
+        assert CROPS[0] not in set(frame["crop"])  # fixture sanity, not the real test
+
+        output = tmp_path_factory.mktemp("artifacts")
+        metadata = train(frame, output_dir=str(output))
+        return {
+            "version": metadata["version"],
+            "preprocessor": joblib.load(output / "preprocessor.joblib"),
+            "regressor": joblib.load(output / "regressor.joblib"),
+            "metadata": metadata,
+        }
+
+    def test_accepts_a_pre_expansion_artifact_it_can_still_serve(self, bundle_missing_crops_0):
         """Regression: the promotion gate must not reject the rollback target.
 
-        _probe_frame() used to hard-code CROPS[0]. After the crop-coverage
-        expansion that became "Alugbati", a crop no artifact trained before the
-        expansion has ever seen -- so verify_bundle() rejected 2026-08-06-055755
-        outright with "Found unknown categories ['Alugbati']", even though that
-        version is what the shared registry marks current and is exactly what a
-        rollback would promote. Real artifact, real failure, no fixture."""
-        from ml.train import ARTIFACT_ROOT
+        _probe_frame() used to hard-code CROPS[0]. A version trained before
+        CROPS[0] == "Alugbati" was added has never seen that crop, so
+        verify_bundle() rejected it outright with "Found unknown categories
+        ['Alugbati']" -- even though that version might be exactly what a
+        rollback needs to promote."""
+        model_state.verify_bundle(bundle_missing_crops_0)
 
-        bundle = model_state.load_bundle("2026-08-06-055755", ARTIFACT_ROOT)
-
-        model_state.verify_bundle(bundle)
-
-    def test_the_probe_crop_comes_from_the_bundle_s_own_metrics(self):
+    def test_the_probe_crop_comes_from_the_bundle_s_own_metrics(self, bundle_missing_crops_0):
         """The mechanism behind the test above, pinned so a future edit can't
         quietly revert to an arbitrary crop and still look green."""
         from data.nutrient_recommendation_guide import CROPS
-        from ml.train import ARTIFACT_ROOT
 
-        bundle = model_state.load_bundle("2026-08-06-055755", ARTIFACT_ROOT)
-        trained_on = set(bundle["metadata"]["metrics"]["by_crop"])
-        probe_crop = model_state._probe_frame(bundle)["crop"].iloc[0]
+        trained_on = set(bundle_missing_crops_0["metadata"]["metrics"]["by_crop"])
+        probe_crop = model_state._probe_frame(bundle_missing_crops_0)["crop"].iloc[0]
 
         assert probe_crop in trained_on
-        # Load-bearing: this artifact's metrics genuinely exclude CROPS[0], so
-        # the assertion above would fail under the old hard-coded behaviour.
+        # Load-bearing: the fixture genuinely excludes CROPS[0], so the
+        # assertion above would fail under the old hard-coded behaviour.
         assert CROPS[0] not in trained_on
 
     def test_falls_back_to_the_first_crop_when_a_bundle_has_no_metrics(self):
