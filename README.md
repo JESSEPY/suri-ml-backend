@@ -18,6 +18,9 @@ The response's `source` field says which path answered: `"table-lookup"` or `"ml
 - `docs/superpowers/specs/2026-08-06-real-soil-data-retraining-results.md` — real training results.
 - `docs/superpowers/specs/2026-08-06-real-soil-data-retraining-final-review-findings.md` — what
   this session's Critical/Important fixes addressed, and why.
+- `docs/superpowers/specs/2026-08-20-da7-extraction-data-quality-findings.md` — how the DA7
+  workbook's 9,654 lab-coded rows reduce to 3,381 training rows, stage by stage, and what tools
+  the extraction pipeline uses.
 
 ## Setup
 
