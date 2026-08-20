@@ -23,7 +23,7 @@ from ml.agronomy import nutrient_requirements, total_nitrogen_from_om
 from ml.recipes import plan_applications
 from ml.remarks import derive_k_remark, derive_om_remark, derive_p_remark, derive_ph_remark
 from data.nutrient_recommendation_guide import (
-    CROPS, BEARING_AGE_BAND, k_cmol_to_ppm, target_unit_for_crop,
+    CANONICAL_CROPS, BEARING_AGE_BAND, k_cmol_to_ppm, target_unit_for_crop,
     resolve_variety, resolve_cultivation_method, resolve_age_band,
 )
 
@@ -87,8 +87,8 @@ def normalize_lab_code(raw_code: str, year_label: str) -> str:
 
 def normalize_crop(raw_text: str | None) -> tuple[str, str | None] | None:
     """Returns (crop, variety) for a real, single, supported crop; None for
-    multi-crop text, empty text, or any crop not in the 9-crop list
-    (including the three dropped for insufficient real coverage).
+    multi-crop text, empty text, or any crop CROP_VARIETY_MAP doesn't have
+    an entry for.
 
     The source Crops field is free text that often trails the crop (+
     variety) name with cultivation-method or age-band words the caller
@@ -109,7 +109,7 @@ def normalize_crop(raw_text: str | None) -> tuple[str, str | None] | None:
         if text == key or text.startswith(key + " "):
             mapped = CROP_VARIETY_MAP[key]
             break
-    if mapped is None or mapped[0] not in CROPS:
+    if mapped is None or mapped[0] not in CANONICAL_CROPS:
         return None
     return mapped
 

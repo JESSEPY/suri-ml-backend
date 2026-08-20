@@ -1,8 +1,10 @@
 import pytest
 
+from data.nutrient_recommendation_guide import CANONICAL_CROPS
 from data.parse_real_soil_database import (
     parse_numeric_cell, normalize_lab_code, normalize_crop,
     normalize_cultivation_method, normalize_age_band, find_column,
+    CROP_VARIETY_MAP,
 )
 
 import openpyxl
@@ -315,3 +317,21 @@ class TestBuildTrainingRowDefaultResolution:
             "potassium_cmol_kg": 0.3, "total_nitrogen_pct": None,
         }
         assert build_training_row(raw)["age_band"] == "9yrs & up"
+
+
+class TestCropVarietyMapConsistency:
+    def test_every_mapped_crop_is_canonical(self):
+        """A CROP_VARIETY_MAP entry targeting an alias (or a typo) would
+        silently desynchronize by_crop training metrics from the canonical
+        name Task 7's untrained-crop guard and ml/train.py's evaluation
+        both key on."""
+        for text, (crop, variety) in CROP_VARIETY_MAP.items():
+            assert crop in CANONICAL_CROPS, f"{text!r} maps to non-canonical {crop!r}"
+
+    def test_the_original_nine_crops_still_resolve(self):
+        """Behavior-preservation pin for the pre-existing map — this task
+        changes normalize_crop's validation, not its entries."""
+        assert normalize_crop("Corn") == ("Corn", None)
+        assert normalize_crop("OPV Corn") == ("Corn", "OPV")
+        assert normalize_crop("Hybrid Rice") == ("Rice", "Hybrid")
+        assert normalize_crop("Cassava") == ("Cassava", None)
