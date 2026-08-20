@@ -152,16 +152,20 @@ class PredictionResponse(BaseModel):
     confidence: Confidence | None
 
 
-def boot_version() -> str:
+def boot_version() -> str | None:
     """The registry is the authority on which version is live; the newest
     directory on disk is the fallback so a Supabase outage can't stop the
     service from booting. A registry version that isn't on disk (e.g. this
-    instance was rebuilt) also falls back rather than crashing."""
+    instance was rebuilt) also falls back rather than crashing.
+
+    None means genuinely nothing exists yet -- a brand-new instance, or
+    every version deliberately cleared to retrain from scratch. The service
+    still starts in that case (see the module-level call site below); only
+    /predict actually needs a model loaded, and everything an admin needs to
+    produce the first one (upload data, retrain, promote) doesn't."""
     on_disk = model_state.available_versions(ARTIFACT_ROOT)
     if not on_disk:
-        raise RuntimeError(
-            f"No artifact directory at {ARTIFACT_ROOT}. Run: python -m ml.train --csv <path>"
-        )
+        return None
 
     promoted = registry.current_version()
     if promoted and promoted in on_disk:
@@ -174,7 +178,14 @@ def boot_version() -> str:
     return on_disk[-1]
 
 
-model_state.set_bundle(model_state.load_bundle(boot_version(), ARTIFACT_ROOT))
+_boot_version = boot_version()
+if _boot_version is not None:
+    model_state.set_bundle(model_state.load_bundle(_boot_version, ARTIFACT_ROOT))
+else:
+    logger.warning(
+        "No trained model artifacts found -- starting with no model loaded. "
+        "/predict will refuse requests (503) until the first retrain completes."
+    )
 
 
 def _reconcile_boot_registry() -> None:
@@ -369,11 +380,17 @@ def health() -> dict:
     except Exception:
         supabase_reachable = False
 
-    bundle = model_state.snapshot()
+    try:
+        model_version = model_state.snapshot()["version"]
+        artifacts_loaded = True
+    except RuntimeError:
+        model_version = None
+        artifacts_loaded = False
+
     return {
         "status": "ok",
-        "model_version": bundle["version"],
-        "artifacts_loaded": True,
+        "model_version": model_version,
+        "artifacts_loaded": artifacts_loaded,
         "supabase_reachable": supabase_reachable,
         # Promotion hot-swaps the model in *this* process's memory, so the
         # service is only correct with a single uvicorn worker. Reporting the
@@ -389,7 +406,17 @@ def predict(request: SoilTestRequest, background_tasks: BackgroundTasks) -> Pred
     # One snapshot for the whole request: promotion rebinds the module's
     # bundle reference, and reading it more than once could otherwise pair an
     # old regressor's numbers with a new version string in the same response.
-    bundle = model_state.snapshot()
+    try:
+        bundle = model_state.snapshot()
+    except RuntimeError:
+        # Applies even to the table-lookup path below, which doesn't touch
+        # the regressor at all -- model_version has nowhere honest to come
+        # from for the response either way, and simplicity here beats
+        # partially serving one path before any model exists.
+        raise HTTPException(
+            status_code=503,
+            detail="No model has been trained yet — complete a first retrain before requesting predictions.",
+        )
     features = _build_feature_row(request)
 
     if request.is_complete():
@@ -554,8 +581,12 @@ def retrain_status(job_id: str) -> dict:
 
 @app.get("/model/versions", dependencies=[Depends(require_api_key)])
 def model_versions() -> dict:
+    try:
+        current = model_state.snapshot()["version"]
+    except RuntimeError:
+        current = None
     return {
-        "current": model_state.snapshot()["version"],
+        "current": current,
         "versions": registry.list_versions(),
         "on_disk": model_state.available_versions(ARTIFACT_ROOT),
     }
@@ -565,8 +596,14 @@ def model_versions() -> dict:
 def model_confidence() -> dict:
     """Always-available per-crop confidence for the live model -- unlike
     /predict's confidence field, this isn't tied to a specific prediction or
-    to a retrain job that just finished, so a dashboard can show it at rest."""
-    bundle = model_state.snapshot()
+    to a retrain job that just finished, so a dashboard can show it at rest.
+    No model loaded yet (a fresh instance, or every version deliberately
+    cleared to retrain from scratch) is a real, expected state here, not an
+    error -- reported as an empty by_crop rather than a 500."""
+    try:
+        bundle = model_state.snapshot()
+    except RuntimeError:
+        return {"version": None, "by_crop": {}}
     by_crop_metrics = bundle["metadata"].get("metrics", {}).get("by_crop", {})
     coverage_metrics = bundle["metadata"].get("metrics", {}).get("crop_coverage", {})
 
@@ -603,7 +640,10 @@ def promote_model(request: PromoteRequest) -> dict:
             detail=f"Invalid version {request.version!r}; expected the YYYY-MM-DD-HHMMSS form.",
         )
 
-    previous = model_state.snapshot()["version"]
+    try:
+        previous = model_state.snapshot()["version"]
+    except RuntimeError:
+        previous = None  # first-ever promotion -- nothing was live before this
 
     if request.version not in model_state.available_versions(ARTIFACT_ROOT):
         # Not on this instance -- try the off-instance backup before giving up,

@@ -415,3 +415,85 @@ class TestBootRegistryReconciliation:
             pass
 
         assert calls == [1]
+
+
+def _raise_no_model_loaded(*_args, **_kwargs):
+    raise RuntimeError("No model artifacts loaded")
+
+
+class TestBootWithoutArtifacts:
+    """A full registry/artifact reset (every version deleted, ready to
+    retrain from a freshly re-uploaded training set) used to crash main.py
+    at import time -- boot_version() raised, which meant the whole admin UI
+    (upload, retrain, version history) was unusable for the very first
+    bootstrap. Exactly backwards for a project whose point is "no CLI
+    needed": an admin should be able to do the first retrain from the UI,
+    which needs the server to be *up* with no model loaded yet."""
+
+    def test_boot_version_returns_none_with_no_artifacts_on_disk(self, monkeypatch):
+        monkeypatch.setattr(service.model_state, "available_versions", lambda root: [])
+        assert service.boot_version() is None
+
+
+class TestEndpointsWithoutAModelLoaded:
+    """model_state.snapshot() raises RuntimeError whenever nothing has been
+    loaded -- true both for "never booted one" (see TestBootWithoutArtifacts)
+    and, exercised more easily here, "was loaded, then unset". Every reader
+    must degrade gracefully rather than surface that as an unhandled 500."""
+
+    def test_health_reports_no_model_instead_of_crashing(self, client, monkeypatch):
+        monkeypatch.setattr(service.model_state, "snapshot", _raise_no_model_loaded)
+        response = client.get("/health")
+        assert response.status_code == 200
+        body = response.json()
+        assert body["model_version"] is None
+        assert body["artifacts_loaded"] is False
+
+    def test_predict_returns_a_clean_503_not_a_500(self, client, monkeypatch):
+        monkeypatch.setattr(service.model_state, "snapshot", _raise_no_model_loaded)
+        response = client.post("/predict", json={"crop": "Corn", "data_source": "stk", "ph": 6.5})
+        assert response.status_code == 503
+        assert "retrain" in response.json()["detail"].lower()
+
+    def test_predict_503_applies_to_the_table_lookup_path_too(self, client, monkeypatch):
+        """Even a complete request (which doesn't need the ML ensemble at
+        all) is refused -- model_version has nowhere honest to come from for
+        the response, and simplicity here beats partially serving one path."""
+        monkeypatch.setattr(service.model_state, "snapshot", _raise_no_model_loaded)
+        response = client.post("/predict", json={
+            "crop": "Corn", "data_source": "lab", "ph": 6.5,
+            "organic_matter_pct": 2.8, "phosphorus_ppm": 18.0, "potassium_cmol_kg": 0.35,
+        })
+        assert response.status_code == 503
+
+    def test_model_versions_reports_no_current_instead_of_crashing(self, client, monkeypatch):
+        monkeypatch.setattr(service.model_state, "snapshot", _raise_no_model_loaded)
+        response = client.get("/model/versions")
+        assert response.status_code == 200
+        assert response.json()["current"] is None
+
+    def test_model_confidence_returns_an_empty_response_instead_of_crashing(self, client, monkeypatch):
+        monkeypatch.setattr(service.model_state, "snapshot", _raise_no_model_loaded)
+        response = client.get("/model/confidence")
+        assert response.status_code == 200
+        assert response.json() == {"version": None, "by_crop": {}}
+
+    def test_promote_succeeds_as_a_first_promotion_with_no_previous_version(
+        self, client, monkeypatch
+    ):
+        live = model_state.snapshot()  # captured before monkeypatching it away
+        monkeypatch.setattr(service.model_state, "snapshot", _raise_no_model_loaded)
+        monkeypatch.setattr(service.model_state, "available_versions",
+                            lambda root: [live["version"]])
+        monkeypatch.setattr(service.model_state, "load_bundle",
+                            lambda version, root: live)
+        monkeypatch.setattr(service.model_state, "verify_bundle", lambda bundle: None)
+        monkeypatch.setattr(service.registry, "record_version", lambda **kwargs: None)
+        monkeypatch.setattr(service.registry, "set_current", lambda *args, **kwargs: None)
+
+        try:
+            body = client.post("/model/promote", json={"version": live["version"]}).json()
+            assert body["previous"] is None
+            assert body["current"] == live["version"]
+        finally:
+            model_state.set_bundle(live)
