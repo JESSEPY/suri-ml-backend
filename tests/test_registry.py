@@ -59,6 +59,9 @@ class FakeTable:
     def select(self, _columns):
         return self._query("select")
 
+    def delete(self):
+        return self._query("delete")
+
 
 class FakeClient:
     def __init__(self, rows=None):
@@ -122,3 +125,26 @@ class TestListVersions:
         client = FakeClient(rows=[{"version": "a"}])
         assert registry.list_versions(client=client) == [{"version": "a"}]
         assert client.log[0]["ordering"] == ("trained_at", True)
+
+
+class TestDeleteVersion:
+    def test_deletes_the_single_row_by_version(self):
+        client = FakeClient()
+        registry.delete_version("2026-08-18-101112", client=client)
+
+        entry = client.log[0]
+        assert entry["action"] == "delete"
+        assert ("version", "2026-08-18-101112") in entry["filters"]
+
+
+class TestDeleteAll:
+    def test_deletes_every_row(self):
+        client = FakeClient()
+        registry.delete_all(client=client)
+
+        entry = client.log[0]
+        assert entry["action"] == "delete"
+        # neq on a column no real version equals is the standard Supabase
+        # "delete everything" idiom (delete() alone refuses to run
+        # unfiltered) -- same pattern already used for the training table.
+        assert any(name.startswith("neq:") for name, _ in entry["filters"])

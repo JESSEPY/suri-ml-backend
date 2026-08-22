@@ -84,3 +84,15 @@ def set_current(version: str, promoted_by: str | None = None, client=None) -> No
         "promoted_at": datetime.now(timezone.utc).isoformat(),
         "promoted_by": promoted_by,
     }).eq("version", version).execute()
+
+
+def delete_version(version: str, client=None) -> None:
+    """Caller's job to refuse deleting whichever version is currently live --
+    this just removes the row."""
+    _client(client).table(TABLE).delete().eq("version", version).execute()
+
+
+def delete_all(client=None) -> None:
+    """delete() with no filter is refused by Supabase -- neq on a column no
+    real version ever equals is the standard "delete everything" idiom."""
+    _client(client).table(TABLE).delete().neq("version", "").execute()

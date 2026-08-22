@@ -10,12 +10,15 @@ from __future__ import annotations
 
 import logging
 import os
+import shutil
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Literal
 
 import pandas as pd
-from fastapi import BackgroundTasks, Depends, FastAPI, File, Header, HTTPException, UploadFile
+from fastapi import (
+    BackgroundTasks, Depends, FastAPI, File, Header, HTTPException, Query, UploadFile,
+)
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, field_validator
 from starlette.concurrency import run_in_threadpool
@@ -699,3 +702,89 @@ def promote_model(request: PromoteRequest) -> dict:
         "previous": previous,
         "registry_recorded": registry_recorded,
     }
+
+
+@app.delete("/model/versions", dependencies=[Depends(require_api_key)])
+def delete_all_model_versions() -> dict:
+    """Full reset: every version, everywhere -- registry, Storage, local
+    disk, and the in-memory bundle /predict is currently serving. After
+    this, /predict refuses requests (503) until the next retrain, the same
+    boot-with-nothing-loaded state main.py already handles gracefully.
+
+    Must be registered before DELETE /model/{version} below -- FastAPI
+    matches routes in definition order, and "versions" is a syntactically
+    valid value for that route's {version} path parameter. Defined after it,
+    this would never be reached; every bulk-delete request would instead hit
+    delete_model_version(version="versions")."""
+    deleted_count = len(model_state.available_versions(ARTIFACT_ROOT))
+
+    if os.path.isdir(ARTIFACT_ROOT):
+        for entry in os.listdir(ARTIFACT_ROOT):
+            shutil.rmtree(os.path.join(ARTIFACT_ROOT, entry), ignore_errors=True)
+
+    artifacts_store.delete_all_versions()
+    registry.delete_all()
+    model_state.clear_bundle()
+
+    return {"deleted_versions": deleted_count}
+
+
+@app.delete("/model/{version}", dependencies=[Depends(require_api_key)])
+def delete_model_version(version: str) -> dict:
+    """Deletes one version everywhere it lives: the registry row, its
+    Storage backup, and its local-disk directory. Never the live version --
+    that would leave /predict serving a bundle whose files just vanished out
+    from under it, functional only until the next restart notices."""
+    if not model_state.is_version_name(version):
+        raise HTTPException(
+            status_code=422,
+            detail=f"Invalid version {version!r}; expected the YYYY-MM-DD-HHMMSS form.",
+        )
+
+    try:
+        if model_state.snapshot()["version"] == version:
+            raise HTTPException(
+                status_code=422,
+                detail=f"{version!r} is the live version and cannot be deleted. "
+                        "Promote a different version first.",
+            )
+    except RuntimeError:
+        pass  # no live model at all -- nothing this delete could break
+
+    exists_on_disk = version in model_state.available_versions(ARTIFACT_ROOT)
+    exists_in_registry = registry.get_version(version) is not None
+    if not exists_on_disk and not exists_in_registry:
+        raise HTTPException(status_code=404, detail=f"Version {version!r} does not exist.")
+
+    registry.delete_version(version)
+    artifacts_store.delete_version(version)
+    shutil.rmtree(os.path.join(ARTIFACT_ROOT, version), ignore_errors=True)
+
+    return {"deleted": version}
+
+
+def _delete_all_training_data() -> int:
+    from data.ingest_to_supabase import delete_all_records
+    return delete_all_records()
+
+
+def _list_training_data_page(page: int, page_size: int) -> tuple[list[dict], int]:
+    from data.ingest_to_supabase import list_records_paginated
+    return list_records_paginated(page, page_size)
+
+
+@app.delete("/training-data", dependencies=[Depends(require_api_key)])
+def delete_all_training_data() -> dict:
+    """Clears ml_soil_training_data entirely. Does not touch any trained
+    model -- an already-trained version keeps working exactly as before,
+    this only affects what the *next* retrain would learn from."""
+    return {"deleted": _delete_all_training_data()}
+
+
+@app.get("/training-data", dependencies=[Depends(require_api_key)])
+def list_training_data(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(25, ge=1, le=100),
+) -> dict:
+    rows, total = _list_training_data_page(page, page_size)
+    return {"rows": rows, "total": total, "page": page, "page_size": page_size}

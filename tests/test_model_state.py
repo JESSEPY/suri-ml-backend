@@ -19,6 +19,14 @@ class TestSnapshotAtomicity:
         model_state.set_bundle(bundle)
         assert model_state.snapshot()["version"] == "v1"
 
+    def test_clear_bundle_makes_snapshot_raise_again(self, monkeypatch):
+        bundle = {"version": "v1", "preprocessor": object(),
+                  "regressor": object(), "metadata": {}}
+        monkeypatch.setattr(model_state, "_current", bundle)
+        model_state.clear_bundle()
+        with pytest.raises(RuntimeError, match="No model artifacts loaded"):
+            model_state.snapshot()
+
     def test_a_snapshot_is_never_half_swapped(self, monkeypatch):
         """The whole point of the refactor: a reader must see one coherent
         version, never the old regressor paired with the new version string."""

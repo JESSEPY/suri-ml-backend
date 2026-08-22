@@ -61,6 +61,31 @@ def ingest_records(
     return total
 
 
+def delete_all_records(client: Client | None = None) -> int:
+    """delete() with no filter is refused by Supabase -- neq on a column no
+    real row ever has a blank value for is the standard "delete everything"
+    idiom (same pattern as ml/registry.py's delete_all)."""
+    client = client or get_client()
+    result = client.table(TABLE).delete().neq("laboratory_code", "").execute()
+    return len(result.data or [])
+
+
+def list_records_paginated(
+    page: int, page_size: int, client: Client | None = None
+) -> tuple[list[dict], int]:
+    """1-indexed page, inclusive zero-indexed range under the hood (Supabase's
+    .range(start, end) convention) -- page 1 of size 20 is rows 0-19, page 2
+    is 20-39. Returns (rows, total_row_count) so the caller can compute page
+    count without a second round trip."""
+    client = client or get_client()
+    start = (page - 1) * page_size
+    end = start + page_size - 1
+    result = client.table(TABLE).select("*", count="exact").order(
+        "laboratory_code"
+    ).range(start, end).execute()
+    return result.data or [], result.count or 0
+
+
 def _load_frame(csv_path: str) -> pd.DataFrame:
     # keep_default_na=False + explicit na_values=[""]: several of this
     # schema's nominal columns (variety/cultivation_method/age_band) use

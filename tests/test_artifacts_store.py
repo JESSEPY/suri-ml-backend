@@ -16,6 +16,26 @@ class FakeBucket:
     def download(self, path):
         return self.store[path]
 
+    def remove(self, paths):
+        if self.fail:
+            raise RuntimeError("storage unavailable")
+        for path in paths:
+            self.store.pop(path, None)
+
+    def list(self, prefix=""):
+        # Real Supabase Storage .list(prefix) returns one entry per
+        # immediate child (folder or file) under that prefix, not every
+        # nested key -- good enough here since this store is always exactly
+        # two levels deep (version/filename).
+        if prefix == "":
+            names = {path.split("/", 1)[0] for path in self.store}
+        else:
+            depth = prefix.rstrip("/") + "/"
+            names = {
+                path[len(depth):] for path in self.store if path.startswith(depth)
+            }
+        return [{"name": name} for name in sorted(names)]
+
 
 class FakeStorage:
     def __init__(self, store, fail=False):
@@ -92,3 +112,45 @@ class TestDownloadVersion:
         ) is False
         assert not (tmp_path / "nope").exists()
         assert not (tmp_path / "nope.partial").exists()
+
+
+class TestDeleteVersion:
+    def test_removes_every_artifact_file_under_the_version_prefix(self):
+        store = {
+            "v1/preprocessor.joblib": b"pre", "v1/regressor.joblib": b"reg",
+            "v1/metadata.json": b"{}",
+            "v2/preprocessor.joblib": b"pre2",  # a different version, must survive
+        }
+        client = FakeClient(store=store)
+
+        assert artifacts_store.delete_version("v1", client=client) is True
+        assert sorted(store) == ["v2/preprocessor.joblib"]
+
+    def test_a_storage_outage_is_reported_not_raised(self):
+        store = {"v1/preprocessor.joblib": b"pre"}
+        assert artifacts_store.delete_version(
+            "v1", client=FakeClient(store=store, fail=True)
+        ) is False
+
+
+class TestDeleteAllVersions:
+    def test_removes_every_object_in_the_bucket(self):
+        store = {
+            "v1/preprocessor.joblib": b"pre", "v1/regressor.joblib": b"reg",
+            "v1/metadata.json": b"{}",
+            "v2/preprocessor.joblib": b"pre2", "v2/regressor.joblib": b"reg2",
+            "v2/metadata.json": b"{}",
+        }
+        client = FakeClient(store=store)
+
+        assert artifacts_store.delete_all_versions(client=client) is True
+        assert store == {}
+
+    def test_an_already_empty_bucket_is_a_no_op_success(self):
+        assert artifacts_store.delete_all_versions(client=FakeClient(store={})) is True
+
+    def test_a_storage_outage_is_reported_not_raised(self):
+        store = {"v1/preprocessor.joblib": b"pre"}
+        assert artifacts_store.delete_all_versions(
+            client=FakeClient(store=store, fail=True)
+        ) is False

@@ -57,6 +57,17 @@ def set_bundle(bundle: dict) -> None:
         _current = bundle
 
 
+def clear_bundle() -> None:
+    """Explicitly unloads the live model -- used when every version has just
+    been deleted (DELETE /model/versions), so /predict correctly starts
+    refusing requests (503) immediately rather than continuing to serve
+    whatever was already in memory until the next restart happens to notice
+    the files are gone."""
+    global _current
+    with _lock:
+        _current = None
+
+
 def snapshot() -> dict:
     with _lock:
         if _current is None:

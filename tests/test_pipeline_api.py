@@ -497,3 +497,122 @@ class TestEndpointsWithoutAModelLoaded:
             assert body["current"] == live["version"]
         finally:
             model_state.set_bundle(live)
+
+
+class TestDeleteModelVersion:
+    def test_refuses_to_delete_the_live_version(self, client):
+        live = model_state.snapshot()["version"]
+        response = client.delete(f"/model/{live}")
+        assert response.status_code == 422
+        assert "live" in response.json()["detail"].lower()
+
+    @pytest.mark.parametrize("version", [
+        "latest", "2026-08-06-055755.partial", "2026-8-6-55755",
+    ])
+    def test_a_malformed_version_is_refused_before_touching_anything(
+        self, client, monkeypatch, version
+    ):
+        # A value containing "/" (e.g. "../../etc/passwd") never reaches this
+        # handler at all -- {version} is a single path segment by default,
+        # so FastAPI 404s at the routing layer before any of our code runs.
+        # These are same-segment strings that pass routing but must still
+        # fail is_version_name()'s format check.
+        def explode(*_args, **_kwargs):
+            raise AssertionError("a malformed version must not reach deletion")
+
+        monkeypatch.setattr(service.registry, "delete_version", explode)
+        monkeypatch.setattr(service.artifacts_store, "delete_version", explode)
+
+        response = client.delete(f"/model/{version}")
+        assert response.status_code == 422
+
+    def test_deletes_a_non_live_version_everywhere(self, client, monkeypatch, tmp_path):
+        target = "2026-01-01-000000"
+        (tmp_path / target).mkdir()
+        (tmp_path / target / "metadata.json").write_text("{}")
+        monkeypatch.setattr(service, "ARTIFACT_ROOT", str(tmp_path))
+        monkeypatch.setattr(service.model_state, "available_versions",
+                            lambda root: [target])
+
+        registry_calls, storage_calls = [], []
+        monkeypatch.setattr(service.registry, "delete_version", registry_calls.append)
+        monkeypatch.setattr(service.artifacts_store, "delete_version",
+                            lambda version, **_kw: storage_calls.append(version) or True)
+
+        response = client.delete(f"/model/{target}")
+
+        assert response.status_code == 200
+        assert registry_calls == [target]
+        assert storage_calls == [target]
+        assert not (tmp_path / target).exists()
+
+    def test_404_when_the_version_exists_nowhere(self, client, monkeypatch):
+        monkeypatch.setattr(service.model_state, "available_versions", lambda root: [])
+        monkeypatch.setattr(service.registry, "get_version", lambda version: None)
+        response = client.delete("/model/2099-01-01-000000")
+        assert response.status_code == 404
+
+
+class TestDeleteAllModelVersions:
+    def test_clears_registry_storage_disk_and_the_live_bundle(self, client, monkeypatch, tmp_path):
+        live = model_state.snapshot()  # captured so it can be restored after
+        (tmp_path / "2026-01-01-000000").mkdir()
+        (tmp_path / "2026-01-02-000000").mkdir()
+        monkeypatch.setattr(service, "ARTIFACT_ROOT", str(tmp_path))
+
+        registry_called = []
+        monkeypatch.setattr(service.registry, "delete_all", lambda: registry_called.append(1))
+        monkeypatch.setattr(service.artifacts_store, "delete_all_versions", lambda **_kw: True)
+
+        try:
+            response = client.delete("/model/versions")
+            assert response.status_code == 200
+            assert registry_called == [1]
+            assert list(tmp_path.iterdir()) == []
+            with pytest.raises(RuntimeError, match="No model artifacts loaded"):
+                model_state.snapshot()
+        finally:
+            model_state.set_bundle(live)
+
+
+class TestDeleteAllTrainingData:
+    def test_deletes_everything_and_reports_the_count(self, client, monkeypatch):
+        monkeypatch.setattr(service, "_delete_all_training_data", lambda: 3362)
+        response = client.delete("/training-data")
+        assert response.status_code == 200
+        assert response.json() == {"deleted": 3362}
+
+
+class TestListTrainingData:
+    def test_returns_the_requested_page(self, client, monkeypatch):
+        rows = [{"laboratory_code": "A"}]
+        monkeypatch.setattr(
+            service, "_list_training_data_page", lambda page, page_size: (rows, 57)
+        )
+        response = client.get("/training-data?page=2&page_size=25")
+        assert response.status_code == 200
+        body = response.json()
+        assert body == {"rows": rows, "total": 57, "page": 2, "page_size": 25}
+
+    def test_defaults_to_page_1_of_25(self, client, monkeypatch):
+        captured = {}
+
+        def fake_list(page, page_size):
+            captured["args"] = (page, page_size)
+            return [], 0
+
+        monkeypatch.setattr(service, "_list_training_data_page", fake_list)
+        client.get("/training-data")
+        assert captured["args"] == (1, 25)
+
+    def test_page_size_is_capped(self, client, monkeypatch):
+        captured = {}
+
+        def fake_list(page, page_size):
+            captured["args"] = (page, page_size)
+            return [], 0
+
+        monkeypatch.setattr(service, "_list_training_data_page", fake_list)
+        response = client.get("/training-data?page_size=10000")
+        assert response.status_code == 422
+

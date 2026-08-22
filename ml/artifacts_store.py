@@ -73,3 +73,35 @@ def download_version(version: str, artifact_root: str, client=None) -> bool:
         logger.warning("Artifact restore for %s failed: %s", version, error)
         shutil.rmtree(staging, ignore_errors=True)
         return False
+
+
+def delete_version(version: str, client=None) -> bool:
+    """Returns False (never raises) on failure -- same posture as
+    upload_version, so a Storage outage doesn't block the caller's own
+    local-disk and registry cleanup for the same version."""
+    try:
+        bucket = _client(client).storage.from_(BUCKET)
+        bucket.remove([f"{version}/{name}" for name in ARTIFACT_FILES])
+        return True
+    except Exception as error:
+        logger.warning("Artifact deletion for %s failed: %s", version, error)
+        return False
+
+
+def delete_all_versions(client=None) -> bool:
+    """Lists every version folder, then every file inside each, before
+    removing them all in one call -- Storage has no recursive "delete this
+    prefix" operation, only delete-by-exact-key."""
+    try:
+        bucket = _client(client).storage.from_(BUCKET)
+        paths = [
+            f"{folder['name']}/{file['name']}"
+            for folder in bucket.list()
+            for file in bucket.list(folder["name"])
+        ]
+        if paths:
+            bucket.remove(paths)
+        return True
+    except Exception as error:
+        logger.warning("Bulk artifact deletion failed: %s", error)
+        return False
