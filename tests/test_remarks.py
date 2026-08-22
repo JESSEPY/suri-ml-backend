@@ -8,24 +8,26 @@ from ml.remarks import (
 class TestKnownReferenceValues:
     """Fixed reference points for the band functions, at the same numeric
     values a real DA Region 7 report (laboratory_code SCC-26-417-417) once
-    supplied. That record was later traced to a document outside this
-    project's real dataset and retired as a training/golden-test fixture
-    (see docs/superpowers/specs/2026-08-05-real-soil-data-retraining-design.md's
-    "Golden test — retired" section) -- these are no longer validated
-    against an independent real-world source, just fixed values that
-    exercise each band function's boundaries and typical range."""
+    supplied. pH and P are independently confirmed, so those two assertions
+    still reflect a plausible real reading. The OM/K boundaries were, at the
+    time these two assertions were written, calibrated against that same
+    now-untraceable record -- see the OM/K provenance note in remarks.py's
+    module docstring for how the boundaries were since replaced with DA's
+    Table 3 (Nutrient Recommendation Guide) bins, and why "moderately low"/
+    "sufficient+" are no longer necessarily what these two exact values
+    would resolve to."""
 
     def test_ph_8_17_is_moderately_alkaline(self):
         assert derive_ph_remark(8.17) == "MODERATELY ALKALINE"
 
-    def test_om_3_21_is_moderately_low(self):
-        assert derive_om_remark(3.21) == "MODERATELY LOW"
+    def test_om_3_21_is_low(self):
+        assert derive_om_remark(3.21) == "LOW"
 
     def test_p_18_96_is_high(self):
         assert derive_p_remark(18.96) == "HIGH"
 
-    def test_k_138_is_sufficient_plus(self):
-        assert derive_k_remark(138.00) == "SUFFICIENT+"
+    def test_k_138_is_sufficient(self):
+        assert derive_k_remark(138.00) == "SUFFICIENT"
 
 
 class TestPhBands:
@@ -49,9 +51,14 @@ class TestPhBands:
 
 
 class TestOtherBands:
+    # OM boundaries are the DA Nutrient Recommendation Guide's real Table 3
+    # bins (0-2.0, 2.1-3.5, 3.6-4.5, 4.6-5.5, >5.6) -- see remarks.py's
+    # module docstring for provenance. 2.1/3.6/4.6/5.6 are each the printed
+    # start of the *next* band, used as this function's exclusive upper
+    # bound so a value like 2.0 correctly stays in "VERY LOW".
     @pytest.mark.parametrize("value,expected", [
-        (0.5, "VERY LOW"), (1.0, "LOW"), (2.0, "MODERATELY LOW"),
-        (3.4, "MODERATE"), (5.0, "HIGH"), (7.0, "HIGH"),
+        (1.0, "VERY LOW"), (2.1, "LOW"), (3.6, "MODERATELY LOW"),
+        (4.6, "MODERATE"), (5.6, "HIGH"), (7.0, "HIGH"),
     ])
     def test_om_boundaries(self, value, expected):
         assert derive_om_remark(value) == expected
@@ -63,9 +70,15 @@ class TestOtherBands:
     def test_p_boundaries(self, value, expected):
         assert derive_p_remark(value) == expected
 
+    # Extractable K boundaries are the DA Nutrient Recommendation Guide's
+    # real Table 3 bins (0-35, 36-55, 56-250, 251-300, >301), same
+    # next-band-start-as-exclusive-upper-bound convention as OM above.
+    # DA's table attaches fertilizer rates to each bin, not label words --
+    # DEFICIENT/LOW/SUFFICIENT/SUFFICIENT+/EXCESSIVE are this project's own
+    # naming for those five rate tiers, not DA terminology.
     @pytest.mark.parametrize("value,expected", [
-        (30.0, "DEFICIENT"), (60.0, "SUFFICIENT"),
-        (120.0, "SUFFICIENT+"), (250.0, "SUFFICIENT+"),
+        (20.0, "DEFICIENT"), (36.0, "LOW"), (56.0, "SUFFICIENT"),
+        (251.0, "SUFFICIENT+"), (301.0, "EXCESSIVE"), (400.0, "EXCESSIVE"),
     ])
     def test_k_boundaries(self, value, expected):
         assert derive_k_remark(value) == expected
@@ -88,7 +101,7 @@ class TestOrderLists:
         assert len(PH_ORDER) == 7
         assert len(OM_ORDER) == 5
         assert len(P_ORDER) == 4
-        assert len(K_ORDER) == 3
+        assert len(K_ORDER) == 5
 
     def test_every_derived_remark_is_in_its_order_list(self):
         assert derive_ph_remark(8.17) in PH_ORDER

@@ -1,5 +1,8 @@
 import pytest
-from ml.confidence import confidence_from_metrics, downgrade_tier, TIER_PCT_CEILING
+from ml.confidence import (
+    apply_sample_size_floor, confidence_from_metrics, downgrade_tier,
+    LOW_SAMPLE_THRESHOLD, TIER_PCT_CEILING,
+)
 
 
 class TestConfidenceFromMetrics:
@@ -48,6 +51,39 @@ class TestDowngradeTier:
 
     def test_limited_stays_limited(self):
         assert downgrade_tier("limited") == "limited"
+
+
+class TestApplySampleSizeFloor:
+    """A tier computed from very few held-out rows isn't trustworthy no
+    matter how good its error looks -- a single test row can produce any
+    normalized error at all, good or bad, by chance. See
+    docs/superpowers/specs/2026-08-12-ml-prediction-confidence-design.md's
+    successor note on this (added alongside this floor)."""
+
+    def test_below_threshold_forces_limited(self):
+        tier, pct = apply_sample_size_floor("high", 91, n=3)
+        assert tier == "limited"
+
+    def test_below_threshold_caps_pct_at_the_limited_ceiling(self):
+        tier, pct = apply_sample_size_floor("high", 91, n=1)
+        assert pct == TIER_PCT_CEILING["limited"]
+
+    def test_at_threshold_is_not_downgraded(self):
+        tier, pct = apply_sample_size_floor("high", 91, n=LOW_SAMPLE_THRESHOLD)
+        assert (tier, pct) == ("high", 91)
+
+    def test_above_threshold_is_unchanged(self):
+        assert apply_sample_size_floor("fair", 70, n=170) == ("fair", 70)
+
+    def test_already_limited_below_threshold_is_unchanged(self):
+        assert apply_sample_size_floor("limited", 20, n=1) == ("limited", 20)
+
+    def test_none_n_is_unchanged(self):
+        """n is None for artifacts trained before sample-count tracking
+        existed -- treated as "unknown", not "too few", since forcing every
+        crop in an old artifact to Limited would be a false downgrade, not
+        an honest one."""
+        assert apply_sample_size_floor("high", 91, n=None) == ("high", 91)
 
 
 class TestTierPctCeiling:

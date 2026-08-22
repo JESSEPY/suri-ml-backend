@@ -72,6 +72,19 @@ def cv_weights(X, y, groups, n_splits: int = 5) -> list[tuple[float, float]]:
     return weights
 
 
+def _json_safe_r2(y_true, y_pred) -> float | None:
+    """r2_score is mathematically undefined (NaN) for a group with fewer
+    than 2 samples or zero target variance in its held-out split -- a raw
+    NaN survives Python's own permissive json.dumps but breaks the moment
+    registry.record_version() tries to upsert it to Supabase, which raises
+    "Out of range float values are not JSON compliant: nan". None is the
+    honest "not computable here" value every downstream consumer already
+    expects (main.py's Confidence never reads r2; the admin UI's confidence
+    table already renders a null r2 as "—")."""
+    score = r2_score(y_true, y_pred)
+    return None if np.isnan(score) else float(score)
+
+
 def evaluate(model, X, y, sources, crops, X_train, y_train) -> dict:
     predicted = model.predict(X)
 
@@ -80,7 +93,7 @@ def evaluate(model, X, y, sources, crops, X_train, y_train) -> dict:
         dummy = DummyRegressor(strategy="mean").fit(X_train, y_train[:, index])
         overall[name] = {
             "mae": float(mean_absolute_error(y[:, index], predicted[:, index])),
-            "r2": float(r2_score(y[:, index], predicted[:, index])),
+            "r2": _json_safe_r2(y[:, index], predicted[:, index]),
             "dummy_mae": float(mean_absolute_error(y[:, index], dummy.predict(X))),
         }
 
@@ -91,8 +104,9 @@ def evaluate(model, X, y, sources, crops, X_train, y_train) -> dict:
             result[str(label)] = {
                 name: {
                     "mae": float(mean_absolute_error(y[mask, index], predicted[mask, index])),
-                    "r2": float(r2_score(y[mask, index], predicted[mask, index])),
+                    "r2": _json_safe_r2(y[mask, index], predicted[mask, index]),
                     "mean_actual": float(np.mean(y[mask, index])),
+                    "n": int(mask.sum()),
                 }
                 for index, name in enumerate(TARGET_COLUMNS)
             }
@@ -105,7 +119,38 @@ def evaluate(model, X, y, sources, crops, X_train, y_train) -> dict:
     }
 
 
+def crop_coverage(train_df: pd.DataFrame, val_df: pd.DataFrame, test_df: pd.DataFrame) -> dict:
+    """Per-crop train/val/test row counts. by_crop's own "n" (evaluate()'s
+    test-set count) only shows the held-out slice a crop's tier is built
+    on; this is the rest of the picture -- how much real data that crop has
+    overall, and how it split three ways -- for the admin Confidence view."""
+    all_crops = set(train_df.crop) | set(val_df.crop) | set(test_df.crop)
+    coverage = {}
+    for crop in all_crops:
+        train_n = int((train_df.crop == crop).sum())
+        val_n = int((val_df.crop == crop).sum())
+        test_n = int((test_df.crop == crop).sum())
+        coverage[str(crop)] = {
+            "train": train_n, "val": val_n, "test": test_n,
+            "total": train_n + val_n + test_n,
+        }
+    return coverage
+
+
 def train(frame: pd.DataFrame, output_dir: str | None = None, seed: int = RANDOM_SEED) -> dict:
+    if len(frame) == 0:
+        # _load_frame() on zero Supabase rows returns a DataFrame with no
+        # columns at all (not just no rows), so grouped_split()'s very next
+        # line -- frame[GROUP_COLUMN] -- would otherwise raise a bare
+        # KeyError('laboratory_code'). The admin UI's error-message
+        # heuristic (main.py's friendlyTrainingError equivalent) reads that
+        # as "your upload has a problem with this column," which is wrong:
+        # the real problem is there's no training data committed at all.
+        raise ValueError(
+            "No training data available. Upload and commit soil-test data "
+            "before training."
+        )
+
     version = datetime.now(timezone.utc).strftime("%Y-%m-%d-%H%M%S")
     output_dir = output_dir or os.path.join(ARTIFACT_ROOT, version)
     os.makedirs(output_dir, exist_ok=True)
@@ -126,6 +171,7 @@ def train(frame: pd.DataFrame, output_dir: str | None = None, seed: int = RANDOM
         test_df.data_source.to_numpy(), test_df.crop.to_numpy(),
         X_train, y_train,
     )
+    metrics["crop_coverage"] = crop_coverage(train_df, val_df, test_df)
 
     metadata = {
         "version": version,
@@ -146,6 +192,24 @@ def train(frame: pd.DataFrame, output_dir: str | None = None, seed: int = RANDOM
     return metadata
 
 
+SUPABASE_PAGE_SIZE = 1000
+
+
+def fetch_all_rows(client, table: str, page_size: int = SUPABASE_PAGE_SIZE) -> list[dict]:
+    """PostgREST returns at most 1000 rows per response regardless of how many
+    match, and does so without any error or truncation signal. A bare
+    .select("*") therefore silently caps the training corpus -- read it in
+    explicit ranges until a short page proves the end was reached."""
+    rows: list[dict] = []
+    start = 0
+    while True:
+        page = client.table(table).select("*").range(start, start + page_size - 1).execute().data
+        rows.extend(page)
+        if len(page) < page_size:
+            return rows
+        start += page_size
+
+
 def _load_frame(csv_path: str | None) -> pd.DataFrame:
     if csv_path:
         # keep_default_na=False + explicit na_values=[""]: several of this
@@ -160,8 +224,7 @@ def _load_frame(csv_path: str | None) -> pd.DataFrame:
         # still correctly treats as NaN.
         return pd.read_csv(csv_path, keep_default_na=False, na_values=[""])
     from data.ingest_to_supabase import TABLE, get_client
-    rows = get_client().table(TABLE).select("*").execute().data
-    return pd.DataFrame(rows)
+    return pd.DataFrame(fetch_all_rows(get_client(), TABLE))
 
 
 def _print_summary(metadata: dict) -> None:

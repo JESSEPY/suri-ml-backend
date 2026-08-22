@@ -1,0 +1,226 @@
+import threading
+
+import pytest
+
+from ml import model_state
+from ml.artifacts_store import ARTIFACT_FILES
+
+
+class TestSnapshotAtomicity:
+    def test_snapshot_raises_before_anything_is_loaded(self, monkeypatch):
+        monkeypatch.setattr(model_state, "_current", None)
+        with pytest.raises(RuntimeError, match="No model artifacts loaded"):
+            model_state.snapshot()
+
+    def test_snapshot_returns_the_bundle_that_was_set(self, monkeypatch):
+        monkeypatch.setattr(model_state, "_current", None)
+        bundle = {"version": "v1", "preprocessor": object(),
+                  "regressor": object(), "metadata": {}}
+        model_state.set_bundle(bundle)
+        assert model_state.snapshot()["version"] == "v1"
+
+    def test_clear_bundle_makes_snapshot_raise_again(self, monkeypatch):
+        bundle = {"version": "v1", "preprocessor": object(),
+                  "regressor": object(), "metadata": {}}
+        monkeypatch.setattr(model_state, "_current", bundle)
+        model_state.clear_bundle()
+        with pytest.raises(RuntimeError, match="No model artifacts loaded"):
+            model_state.snapshot()
+
+    def test_a_snapshot_is_never_half_swapped(self, monkeypatch):
+        """The whole point of the refactor: a reader must see one coherent
+        version, never the old regressor paired with the new version string."""
+        monkeypatch.setattr(model_state, "_current", None)
+        model_state.set_bundle({"version": "v1", "preprocessor": "p1",
+                                "regressor": "r1", "metadata": {}})
+
+        seen = []
+        stop = threading.Event()
+
+        def reader():
+            while not stop.is_set():
+                snapshot = model_state.snapshot()
+                seen.append((snapshot["version"], snapshot["preprocessor"],
+                             snapshot["regressor"]))
+
+        thread = threading.Thread(target=reader, daemon=True)
+        thread.start()
+        for index in range(2, 60):
+            model_state.set_bundle({
+                "version": f"v{index}", "preprocessor": f"p{index}",
+                "regressor": f"r{index}", "metadata": {},
+            })
+        stop.set()
+        thread.join(timeout=5)
+
+        for version, preprocessor, regressor in seen:
+            suffix = version[1:]
+            assert preprocessor == f"p{suffix}"
+            assert regressor == f"r{suffix}"
+
+
+def make_version_dir(root, name, files=ARTIFACT_FILES):
+    """A version directory only counts as available once every artifact file is
+    there -- the contents are never parsed by available_versions()."""
+    directory = root / name
+    directory.mkdir()
+    for filename in files:
+        (directory / filename).write_bytes(b"x")
+    return directory
+
+
+class TestAvailableVersions:
+    def test_lists_only_directories_sorted_ascending(self, tmp_path):
+        make_version_dir(tmp_path, "2026-08-01-000000")
+        make_version_dir(tmp_path, "2026-08-03-000000")
+        make_version_dir(tmp_path, "2026-08-02-000000")
+        (tmp_path / "notes.txt").write_text("ignored")
+
+        assert model_state.available_versions(str(tmp_path)) == [
+            "2026-08-01-000000", "2026-08-02-000000", "2026-08-03-000000",
+        ]
+
+    def test_missing_root_returns_empty(self, tmp_path):
+        assert model_state.available_versions(str(tmp_path / "nope")) == []
+
+    def test_a_half_written_directory_is_not_a_version(self, tmp_path):
+        """ml/train.py makes its output directory first and writes
+        metadata.json last, so a killed run leaves this behind. Counting it
+        would make the next boot load a metadata.json that never existed."""
+        make_version_dir(tmp_path, "2026-08-01-000000")
+        (tmp_path / "2026-08-04-000000").mkdir()  # killed mid-train: empty
+        make_version_dir(
+            tmp_path, "2026-08-05-000000",
+            files=("preprocessor.joblib", "regressor.joblib"),  # no metadata.json
+        )
+
+        assert model_state.available_versions(str(tmp_path)) == ["2026-08-01-000000"]
+
+    def test_a_misnamed_directory_is_not_a_version(self, tmp_path):
+        """Only ml/train.py's %Y-%m-%d-%H%M%S stamp names a real artifact.
+        `.partial` is artifacts_store's staging directory, which survives a
+        SIGKILL that its own cleanup cannot cover."""
+        make_version_dir(tmp_path, "2026-08-01-000000")
+        make_version_dir(tmp_path, "2026-08-02-000000.partial")
+        make_version_dir(tmp_path, "backup")
+        make_version_dir(tmp_path, "2026-08-03-00000")  # one digit short
+
+        assert model_state.available_versions(str(tmp_path)) == ["2026-08-01-000000"]
+
+
+class TestIsVersionName:
+    @pytest.mark.parametrize("name", ["2026-08-06-055755", "1999-12-31-235959"])
+    def test_accepts_the_training_stamp(self, name):
+        assert model_state.is_version_name(name)
+
+    @pytest.mark.parametrize("name", [
+        "", "latest", "../../etc/passwd", "2026-08-06-055755/..",
+        "2026-08-06-055755.partial", "2026-8-6-55755", "2026-08-06-055755\n",
+    ])
+    def test_rejects_anything_else(self, name):
+        assert not model_state.is_version_name(name)
+
+
+class TestVerifyBundle:
+    def test_rejects_a_bundle_whose_preprocessor_cannot_transform(self):
+        class BrokenPreprocessor:
+            def transform(self, _frame):
+                raise ValueError("categories changed")
+
+        bundle = {"version": "v1", "preprocessor": BrokenPreprocessor(),
+                  "regressor": object(), "metadata": {}}
+        with pytest.raises(ValueError, match="cannot serve"):
+            model_state.verify_bundle(bundle)
+
+    def test_accepts_the_real_currently_loaded_bundle(self):
+        model_state.verify_bundle(model_state.snapshot())
+
+    def test_the_newest_artifact_s_encoder_vocabulary_matches_the_code(self):
+        """Artifact/code drift, asserted directly instead of by luck.
+
+        verify_bundle()'s probe row is a single crop, so on its own it can only
+        notice a vocabulary change when that one crop is the one that moved --
+        and deliberately so: the probe now picks a crop the artifact was
+        actually trained on, precisely so an older, narrower artifact stays
+        promotable. Nothing in verify_bundle() therefore proves a freshly
+        trained artifact covers the *whole* current crop list, which is the
+        failure Task 9 of
+        docs/superpowers/plans/2026-08-18-crop-coverage-expansion.md had to
+        repair by hand. This test proves it.
+
+        Anchored on the newest complete artifact directory rather than
+        model_state.snapshot(): the newest directory is what a retrain just
+        produced and what a fresh instance falls back to, so this fails the
+        moment someone edits GUIDE_ROWS without retraining. snapshot() is the
+        wrong anchor here -- it holds whatever the shared registry currently
+        calls live, which is deliberately allowed to be an older, narrower
+        artifact (promotion is a human decision), and main.py's predict path
+        already refuses crops absent from a bundle's own by_crop metrics."""
+        from data.nutrient_recommendation_guide import CANONICAL_CROPS
+        from ml.train import ARTIFACT_ROOT
+
+        newest = model_state.available_versions(ARTIFACT_ROOT)[-1]
+        bundle = model_state.load_bundle(newest, ARTIFACT_ROOT)
+        encoder = bundle["preprocessor"].named_transformers_["nom"]
+
+        assert list(encoder.categories_[0]) == CANONICAL_CROPS
+
+    @pytest.fixture(scope="class")
+    def bundle_missing_crops_0(self, tmp_path_factory):
+        """A synthetic stand-in for the regression this used to pin against a
+        real artifact (2026-08-06-055755, a pre-crop-expansion version that
+        genuinely never trained on CROPS[0] == "Alugbati"). That artifact was
+        deliberately deleted in a full registry/artifact reset -- rebuilt here
+        instead of depending on one specific file surviving forever, same
+        "excludes CROPS[0]" property, hermetic either way."""
+        import joblib
+        from data.nutrient_recommendation_guide import CROPS
+        from ml.train import train
+        from tests.fixtures import sample_training_frame
+
+        frame = sample_training_frame(num_records=200, seed=42)
+        frame = frame[frame["crop"] != CROPS[0]].reset_index(drop=True)
+        assert CROPS[0] not in set(frame["crop"])  # fixture sanity, not the real test
+
+        output = tmp_path_factory.mktemp("artifacts")
+        metadata = train(frame, output_dir=str(output))
+        return {
+            "version": metadata["version"],
+            "preprocessor": joblib.load(output / "preprocessor.joblib"),
+            "regressor": joblib.load(output / "regressor.joblib"),
+            "metadata": metadata,
+        }
+
+    def test_accepts_a_pre_expansion_artifact_it_can_still_serve(self, bundle_missing_crops_0):
+        """Regression: the promotion gate must not reject the rollback target.
+
+        _probe_frame() used to hard-code CROPS[0]. A version trained before
+        CROPS[0] == "Alugbati" was added has never seen that crop, so
+        verify_bundle() rejected it outright with "Found unknown categories
+        ['Alugbati']" -- even though that version might be exactly what a
+        rollback needs to promote."""
+        model_state.verify_bundle(bundle_missing_crops_0)
+
+    def test_the_probe_crop_comes_from_the_bundle_s_own_metrics(self, bundle_missing_crops_0):
+        """The mechanism behind the test above, pinned so a future edit can't
+        quietly revert to an arbitrary crop and still look green."""
+        from data.nutrient_recommendation_guide import CROPS
+
+        trained_on = set(bundle_missing_crops_0["metadata"]["metrics"]["by_crop"])
+        probe_crop = model_state._probe_frame(bundle_missing_crops_0)["crop"].iloc[0]
+
+        assert probe_crop in trained_on
+        # Load-bearing: the fixture genuinely excludes CROPS[0], so the
+        # assertion above would fail under the old hard-coded behaviour.
+        assert CROPS[0] not in trained_on
+
+    def test_falls_back_to_the_first_crop_when_a_bundle_has_no_metrics(self):
+        """An artifact carrying no by_crop metrics at all (hand-built, or from
+        a training run that skipped evaluation) still gets a probe rather than
+        an IndexError -- same degrade-gracefully stance as main.py's
+        `known and canonical not in known` guard."""
+        from data.nutrient_recommendation_guide import CROPS
+
+        frame = model_state._probe_frame({"version": "v1", "metadata": {}})
+
+        assert frame["crop"].iloc[0] == CROPS[0]

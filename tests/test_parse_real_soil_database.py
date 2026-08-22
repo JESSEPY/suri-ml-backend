@@ -1,8 +1,10 @@
 import pytest
 
+from data.nutrient_recommendation_guide import CANONICAL_CROPS
 from data.parse_real_soil_database import (
     parse_numeric_cell, normalize_lab_code, normalize_crop,
     normalize_cultivation_method, normalize_age_band, find_column,
+    CROP_VARIETY_MAP,
 )
 
 import openpyxl
@@ -83,10 +85,13 @@ class TestNormalizeCrop:
         assert normalize_crop("   ") is None
 
     def test_unknown_crop_is_rejected(self):
-        """Crops below the real-sample floor (Cabbage/Sorghum/Sugarcane) or
-        not in the 9-crop list at all must not silently pass through."""
-        assert normalize_crop("Sorghum") is None
-        assert normalize_crop("Ampalaya") is None
+        """A crop CROP_VARIETY_MAP has no entry for must not silently pass
+        through. "Nonesuch" can never become real; Sorghum and Ampalaya
+        used to belong here too, back when this system only supported 9
+        crops -- they're now real, recognized crops (see
+        TestCornRiceVariants / TestVegetableVariants), so asserting them
+        rejected here would be testing stale behavior on purpose."""
+        assert normalize_crop("Nonesuch") is None
 
     def test_crop_with_trailing_cultivation_method_text_still_resolves(self):
         """The Crops field is free text that often trails the crop name with
@@ -162,13 +167,13 @@ class TestBuildTrainingRow:
         assert row["variety"] == "None"
         assert row["cultivation_method"] == "None"
         assert row["age_band"] == "None"
-        assert row["om_remark"] == "MODERATELY LOW"
+        assert row["om_remark"] == "LOW"
         assert row["target_unit"] == "kg_ha"
         assert isinstance(row["target_n"], float)
         assert row["target_n"] > 0
 
     def test_k_remark_uses_the_converted_ppm_not_the_raw_cmol_kg(self):
-        """0.35 cmol/kg -> 136.85 ppm -> SUFFICIENT+. Feeding the raw 0.35
+        """0.35 cmol/kg -> 136.85 ppm -> SUFFICIENT. Feeding the raw 0.35
         into derive_k_remark directly would misclassify it as DEFICIENT."""
         raw = {
             "laboratory_code": "2022-SCC417", "crop": "Corn", "variety": None,
@@ -176,7 +181,7 @@ class TestBuildTrainingRow:
             "ph": 6.4, "organic_matter_pct": 2.8, "phosphorus_ppm": 18.0,
             "potassium_cmol_kg": 0.35, "total_nitrogen_pct": None,
         }
-        assert build_training_row(raw)["k_remark"] == "SUFFICIENT+"
+        assert build_training_row(raw)["k_remark"] == "SUFFICIENT"
 
     def test_tree_crop_row_gets_kg_tree_unit(self):
         raw = {
@@ -315,3 +320,122 @@ class TestBuildTrainingRowDefaultResolution:
             "potassium_cmol_kg": 0.3, "total_nitrogen_pct": None,
         }
         assert build_training_row(raw)["age_band"] == "9yrs & up"
+
+
+class TestCropVarietyMapConsistency:
+    def test_every_mapped_crop_is_canonical(self):
+        """A CROP_VARIETY_MAP entry targeting an alias (or a typo) would
+        silently desynchronize by_crop training metrics from the canonical
+        name Task 7's untrained-crop guard and ml/train.py's evaluation
+        both key on."""
+        for text, (crop, variety) in CROP_VARIETY_MAP.items():
+            assert crop in CANONICAL_CROPS, f"{text!r} maps to non-canonical {crop!r}"
+
+    def test_the_original_nine_crops_still_resolve(self):
+        """Behavior-preservation pin for the pre-existing map — this task
+        changes normalize_crop's validation, not its entries."""
+        assert normalize_crop("Corn") == ("Corn", None)
+        assert normalize_crop("OPV Corn") == ("Corn", "OPV")
+        assert normalize_crop("Hybrid Rice") == ("Rice", "Hybrid")
+        assert normalize_crop("Cassava") == ("Cassava", None)
+
+
+class TestCornRiceVariants:
+    @pytest.mark.parametrize("text,expected", [
+        ("sweetcorn", ("Corn", None)),
+        ("Sweet Corn", ("Corn", None)),
+        ("Corn Hybrid", ("Corn", "Hybrid")),
+        ("CORN HYBRID YELLOW", ("Corn", "Hybrid")),
+        ("Corn Tinigib", ("Corn", None)),
+        ("corn tiniguib", ("Corn", None)),
+        ("Sorghum", ("Corn", None)),
+        ("Adlai", ("Corn", "Hybrid")),
+        ("Upland Rice", ("Rice", None)),
+        ("Rice Inbred", ("Rice", "Inbred")),
+    ])
+    def test_variant_resolves(self, text, expected):
+        assert normalize_crop(text) == expected
+
+    def test_upland_rice_cultivation_method_is_still_detected_downstream(self):
+        """normalize_crop only resolves the crop; normalize_cultivation_method
+        runs separately against the same raw text and must still find
+        'upland' regardless of which CROP_VARIETY_MAP key matched."""
+        assert normalize_cultivation_method("Rice", "Upland Rice") == "Upland"
+
+
+class TestVegetableVariants:
+    @pytest.mark.parametrize("text,expected", [
+        ("Lettuce", ("Lettuce", None)),
+        ("Pechay", ("Cabbage", None)),
+        ("Ampalaya", ("Ampalaya", None)),
+        ("Eggplant", ("Eggplant", None)),
+        ("Talong", ("Eggplant", None)),
+        ("Okra", ("Eggplant", None)),
+        ("Sayote", ("Chayote", None)),
+        ("Cabbage", ("Cabbage", None)),
+        ("Squash", ("Squash", None)),
+        ("Carrots", ("Radish", None)),
+        ("Cauliflower", ("Cauliflower", None)),
+        ("Radish", ("Radish", None)),
+        ("Raddish", ("Radish", None)),
+        ("Cucumber", ("Cucumber", None)),
+        ("Pipino", ("Cucumber", None)),
+        ("Watermelon", ("Cucumber", None)),
+        ("Red Cabbage", ("Cabbage", None)),
+        ("Repolyo", ("Cabbage", None)),
+    ])
+    def test_variant_resolves(self, text, expected):
+        assert normalize_crop(text) == expected
+
+
+class TestCondimentRootcropLegumeVariants:
+    @pytest.mark.parametrize("text,expected", [
+        ("Sugarcane", ("Sugarcane", None)),
+        ("Onions", ("Onion", None)),
+        ("Onion", ("Onion", None)),
+        ("Sibuyas", ("Onion", None)),
+        ("Spring Onion", ("Onion", "Spring")),
+        ("Spring Onions", ("Onion", "Spring")),
+        ("Green Onion", ("Onion", "Spring")),
+        ("Ginger", ("Ginger", None)),
+        ("Gabi", ("Gabi", None)),
+        ("Ube", ("Gabi", None)),
+        ("Ubi", ("Gabi", None)),
+        ("Ube Kinampay", ("Gabi", None)),
+        ("Kamote", ("Cassava", None)),
+        ("Sweet Potato", ("Cassava", None)),
+        ("Beans", ("Beans", None)),
+        ("String Beans", ("Beans", None)),
+        ("Baguio Beans", ("Beans", None)),
+        ("Mung Beans", ("Peanut", None)),
+        ("Mungbean", ("Peanut", None)),
+        ("Sili Haba", ("Garlic", None)),
+        ("Sili Labuyo", ("Garlic", None)),
+        ("Sili Espada", ("Garlic", None)),
+        ("Sili", ("Garlic", None)),
+        ("Sili Atsal", ("Garlic", None)),
+        ("Finger Pepper", ("Garlic", None)),
+        ("Hot Pepper", ("Garlic", None)),
+        ("Green Chili", ("Garlic", None)),
+    ])
+    def test_variant_resolves(self, text, expected):
+        assert normalize_crop(text) == expected
+
+    def test_bell_pepper_is_not_mapped(self):
+        """Botanically distinct from the guide's Chili Pepper/Garlic
+        grouping -- deliberately excluded, not force-fit. See the plan's
+        'Deliberately Excluded' table."""
+        assert normalize_crop("Bell Pepper") is None
+        assert normalize_crop("Sweet Pepper") is None
+
+
+class TestTreeAndPlantationVariants:
+    @pytest.mark.parametrize("text,expected", [
+        ("Calamansi", ("Citrus", None)),
+        ("Lemon", ("Citrus", None)),
+        ("Avocado", ("Avocado", None)),
+        ("Jackfruit", ("Avocado", None)),
+        ("Banana Lakatan", ("Banana", None)),
+    ])
+    def test_variant_resolves(self, text, expected):
+        assert normalize_crop(text) == expected

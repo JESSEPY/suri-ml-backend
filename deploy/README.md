@@ -139,6 +139,32 @@ open (see the comment in `main.py` above `require_api_key`) — this is
 intentional for local dev/tests, but means step 4 is easy to forget when
 rebuilding the instance from scratch. Don't skip it once port 8001 is open.
 
+## 5. Retraining pipeline
+
+Once `supabase/migrations/20260818_ml_model_versions.sql` is applied, admins
+retrain from `suri`'s admin dashboard rather than over SSH. What changes
+operationally:
+
+- **Artifacts no longer need to be git-committed to go live.** `main.py` reads
+  the live version from the `ml_model_versions` registry at boot and swaps it
+  in memory on promotion. The pinned `ml/artifacts/<version>/` directory in
+  `.gitignore` still matters as the bootstrap model for a *fresh* instance
+  that has no local artifacts and no registry entry yet.
+- **Artifacts trained on the instance survive deploys.** The Actions workflow
+  runs `git reset --hard origin/main`, which does not delete untracked files,
+  so locally trained artifact directories persist. They are also copied to the
+  `ml-model-artifacts` Supabase Storage bucket, and `/model/promote` restores
+  from there automatically when a requested version is missing from disk —
+  which is what makes rollback work on a rebuilt instance.
+- **`ML_API_KEY` now guards more than `/predict`.** Every pipeline endpoint
+  requires it. `suri`'s server-side proxy sends it; nothing else should be able
+  to trigger a retrain or a promotion.
+- **Retraining runs on the instance while it serves traffic.** `/predict` is
+  never paused. Before relying on this in a live demo, run one retrain while
+  firing `/predict` calls and confirm latency stays acceptable on a
+  `t3.micro` — if it doesn't, lower training's priority rather than blocking
+  requests.
+
 ## Notes
 
 - `main.py` loads the pinned model artifact at import time, so a restart

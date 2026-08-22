@@ -23,7 +23,7 @@ from ml.agronomy import nutrient_requirements, total_nitrogen_from_om
 from ml.recipes import plan_applications
 from ml.remarks import derive_k_remark, derive_om_remark, derive_p_remark, derive_ph_remark
 from data.nutrient_recommendation_guide import (
-    CROPS, BEARING_AGE_BAND, k_cmol_to_ppm, target_unit_for_crop,
+    CANONICAL_CROPS, BEARING_AGE_BAND, k_cmol_to_ppm, target_unit_for_crop,
     resolve_variety, resolve_cultivation_method, resolve_age_band,
 )
 
@@ -42,6 +42,85 @@ CROP_VARIETY_MAP: dict[str, tuple[str, str | None]] = {
     "banana": ("Banana", None),
     "tomato": ("Tomato", None),
     "coconut": ("Coconut", None),
+    # --- Corn / Rice / Sorghum real-world label variants -----------------
+    # "corn tinigib"/"corn tiniguib" need no entry here: they already
+    # resolve via the bare "corn" key's existing prefix match ("corn " is a
+    # leading substring of both) -- confirmed by test before adding this.
+    "sweetcorn": ("Corn", None),
+    "sweet corn": ("Corn", None),
+    "corn hybrid": ("Corn", "Hybrid"),
+    "corn hybrid yellow": ("Corn", "Hybrid"),
+    "sorghum": ("Corn", None),
+    # Guide lists Adlai only on Corn's Hybrid row (Corn /Sorghum/Adlai) --
+    # the crop-coverage-expansion plan deliberately did not register it as
+    # a CROP_ALIASES entry for exactly this reason (a whole-crop alias has
+    # no way to carry "Hybrid" and would wrongly resolve to Native). This
+    # map entry carries the variety explicitly, so it doesn't have that
+    # problem.
+    "adlai": ("Corn", "Hybrid"),
+    "upland rice": ("Rice", None),
+    "rice inbred": ("Rice", "Inbred"),
+    # --- Vegetable real-world label variants ------------------------------
+    "lettuce": ("Lettuce", None),
+    "pechay": ("Cabbage", None),
+    "ampalaya": ("Ampalaya", None),
+    "eggplant": ("Eggplant", None),
+    "talong": ("Eggplant", None),
+    "okra": ("Eggplant", None),
+    "sayote": ("Chayote", None),
+    "cabbage": ("Cabbage", None),
+    "red cabbage": ("Cabbage", None),
+    "repolyo": ("Cabbage", None),
+    "squash": ("Squash", None),
+    "cauliflower": ("Cauliflower", None),
+    "carrots": ("Radish", None),
+    "radish": ("Radish", None),
+    "raddish": ("Radish", None),
+    "cucumber": ("Cucumber", None),
+    "pipino": ("Cucumber", None),
+    "watermelon": ("Cucumber", None),
+    # --- Condiment / rootcrop / legume / sugarcane real-world variants ---
+    "sugarcane": ("Sugarcane", None),
+    "onions": ("Onion", None),
+    "onion": ("Onion", None),
+    "sibuyas": ("Onion", None),
+    "spring onion": ("Onion", "Spring"),
+    "spring onions": ("Onion", "Spring"),
+    "green onion": ("Onion", "Spring"),
+    "ginger": ("Ginger", None),
+    "gabi": ("Gabi", None),
+    "ube": ("Gabi", None),
+    "ubi": ("Gabi", None),
+    "ube kinampay": ("Gabi", None),
+    "kamote": ("Cassava", None),
+    "sweet potato": ("Cassava", None),
+    "beans": ("Beans", None),
+    "string beans": ("Beans", None),
+    "baguio beans": ("Beans", None),
+    "mung beans": ("Peanut", None),
+    "mungbean": ("Peanut", None),
+    # Guide co-lists "Garlic/ Chili Pepper" on one row (CROP_ALIASES already
+    # has "Chili Pepper" -> Garlic); real labels overwhelmingly use "Sili"
+    # (Filipino for chili) rather than the English name. Bell/sweet pepper
+    # is botanically distinct and deliberately NOT mapped here -- no guide
+    # entry to route it to.
+    "sili haba": ("Garlic", None),
+    "sili labuyo": ("Garlic", None),
+    "sili espada": ("Garlic", None),
+    "sili": ("Garlic", None),
+    "sili atsal": ("Garlic", None),
+    "finger pepper": ("Garlic", None),
+    "hot pepper": ("Garlic", None),
+    "green chili": ("Garlic", None),
+    # --- Tree / plantation crop real-world label variants -----------------
+    # "banana lakatan" needs no entry: already resolves via the existing
+    # bare "banana" key's prefix match (Lakatan is a Banana variety name;
+    # the guide has no Banana variety axis, so the detail is discarded --
+    # same as how the pre-existing map already handles varietyless crops).
+    "calamansi": ("Citrus", None),
+    "lemon": ("Citrus", None),
+    "avocado": ("Avocado", None),
+    "jackfruit": ("Avocado", None),
 }
 
 _LAB_CODE_DIGITS = re.compile(r"\d+")
@@ -87,8 +166,8 @@ def normalize_lab_code(raw_code: str, year_label: str) -> str:
 
 def normalize_crop(raw_text: str | None) -> tuple[str, str | None] | None:
     """Returns (crop, variety) for a real, single, supported crop; None for
-    multi-crop text, empty text, or any crop not in the 9-crop list
-    (including the three dropped for insufficient real coverage).
+    multi-crop text, empty text, or any crop CROP_VARIETY_MAP doesn't have
+    an entry for.
 
     The source Crops field is free text that often trails the crop (+
     variety) name with cultivation-method or age-band words the caller
@@ -109,7 +188,7 @@ def normalize_crop(raw_text: str | None) -> tuple[str, str | None] | None:
         if text == key or text.startswith(key + " "):
             mapped = CROP_VARIETY_MAP[key]
             break
-    if mapped is None or mapped[0] not in CROPS:
+    if mapped is None or mapped[0] not in CANONICAL_CROPS:
         return None
     return mapped
 

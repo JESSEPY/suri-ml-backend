@@ -59,6 +59,26 @@ class TestCvWeights:
             assert xgb_weight + krr_weight == pytest.approx(1.0)
 
 
+class TestTrainWithNoData:
+    """A full reset (every row cleared from ml_soil_training_data, ready to
+    retrain from scratch) or simply clicking "Train first model" before
+    uploading anything both reach train() with zero rows. Before this,
+    grouped_split() raised a bare KeyError('laboratory_code') -- the empty
+    frame _load_frame() returns has no columns at all, so indexing by
+    GROUP_COLUMN fails -- which the admin UI's error-message heuristic
+    then misread as an upload-format problem ("Training data has a problem
+    with 'laboratory_code'"), not "there's no data yet."""
+
+    def test_raises_a_clear_error_instead_of_a_bare_keyerror(self):
+        # Matches _load_frame()'s real empty-table shape (pd.DataFrame([]) on
+        # zero Supabase rows has no columns at all, not just no rows) rather
+        # than a same-schema-but-empty frame, which wouldn't have reproduced
+        # the original KeyError('laboratory_code') this guards against.
+        empty = pd.DataFrame([])
+        with pytest.raises(ValueError, match="No training data"):
+            train(empty)
+
+
 class TestTrain:
     @pytest.fixture(scope="class")
     def result(self, tmp_path_factory):
@@ -92,6 +112,18 @@ class TestTrain:
         assert "classification_metrics" not in metadata
         assert "recipe_vocabulary" not in metadata
 
+    def test_metrics_are_strict_json_serializable(self, result):
+        """r2_score is undefined (NaN) for a crop/source whose held-out
+        split has fewer than 2 samples or zero target variance -- this
+        200-row fixture spreads across 81 crops, so several crops hit this
+        every run. A raw NaN survives Python's own permissive json.dumps
+        (it just prints the invalid token `NaN`) but breaks the moment
+        registry.record_version() tries to upsert it to Supabase, which
+        rejects it with "Out of range float values are not JSON compliant:
+        nan". allow_nan=False here reproduces that failure locally."""
+        metadata, _ = result
+        json.dumps(metadata["metrics"], allow_nan=False)
+
     def test_reports_metrics_per_data_source(self, result):
         metadata, _ = result
         assert set(metadata["metrics"]["by_source"].keys()) == {"lab"}
@@ -115,6 +147,43 @@ class TestTrain:
             for target_metrics in crop_metrics.values():
                 assert "mean_actual" in target_metrics
                 assert isinstance(target_metrics["mean_actual"], float)
+
+    def test_reports_sample_count_per_crop_target(self, result):
+        """Needed so a persistent per-crop confidence view (main.py's
+        GET /model/confidence) can show how many rows a crop's tier is
+        actually based on -- a high R2 on 5 rows and a high R2 on 500 rows
+        must not render identically."""
+        metadata, _ = result
+        for crop, crop_metrics in metadata["metrics"]["by_crop"].items():
+            for target_metrics in crop_metrics.values():
+                assert "n" in target_metrics
+                assert isinstance(target_metrics["n"], int)
+                assert target_metrics["n"] > 0
+
+    def test_reports_train_val_test_split_sizes_per_crop(self, result):
+        """metadata["split_sizes"] is overall-only -- the admin Confidence
+        view needs a per-crop breakdown too, so an admin can see a crop's
+        real total row count (train+val+test) next to the much smaller
+        held-out test count its tier is actually built on."""
+        metadata, _ = result
+        coverage = metadata["metrics"]["crop_coverage"]
+        # crop_coverage covers every crop with ANY real data (train, val, or
+        # test); by_crop only covers crops that happened to land in the test
+        # split, which can be a strict subset -- a crop with rows only in
+        # train/val (no test rows at all) has no tier, but still has real
+        # data worth showing coverage for.
+        assert set(coverage.keys()) >= set(metadata["metrics"]["by_crop"].keys())
+        for crop, counts in coverage.items():
+            assert set(counts.keys()) == {"train", "val", "test", "total"}
+            for key in ("train", "val", "test", "total"):
+                assert isinstance(counts[key], int)
+            assert counts["total"] == counts["train"] + counts["val"] + counts["test"]
+            # Where a crop has a tier at all, by_crop's own "n" (evaluate()'s
+            # test-set count) must agree with crop_coverage's "test" -- same
+            # number, two different views.
+            if crop in metadata["metrics"]["by_crop"]:
+                any_target = next(iter(metadata["metrics"]["by_crop"][crop].values()))
+                assert counts["test"] == any_target["n"]
 
     def test_beats_the_mean_baseline_on_every_target(self, result):
         metadata, _ = result
@@ -181,3 +250,67 @@ class TestLoadFrameCsvNoneSentinel:
     def test_genuinely_blank_numeric_cell_still_reads_as_nan(self, csv_path):
         loaded = _load_frame(csv_path)
         assert pd.isna(loaded.loc[1, "organic_matter_pct"])
+
+
+class TestFetchAllRowsPaginates:
+    """PostgREST caps one response at 1000 rows; the real corpus is larger.
+    A single .select("*") would silently return a truncated corpus and train
+    on it without any error surfacing."""
+
+    def test_keeps_requesting_until_a_short_page_arrives(self):
+        from ml.train import fetch_all_rows
+
+        pages = [
+            [{"laboratory_code": f"A{i}"} for i in range(1000)],
+            [{"laboratory_code": f"B{i}"} for i in range(1000)],
+            [{"laboratory_code": f"C{i}"} for i in range(76)],
+        ]
+        requested_ranges = []
+
+        class FakeQuery:
+            def __init__(self, page):
+                self._page = page
+
+            def range(self, start, end):
+                requested_ranges.append((start, end))
+                return self
+
+            def execute(self):
+                return type("R", (), {"data": self._page})()
+
+        class FakeTable:
+            def __init__(self):
+                self._calls = 0
+
+            def select(self, _columns):
+                page = pages[self._calls]
+                self._calls += 1
+                return FakeQuery(page)
+
+        class FakeClient:
+            def __init__(self):
+                self._table = FakeTable()
+
+            def table(self, _name):
+                return self._table
+
+        rows = fetch_all_rows(FakeClient(), "ml_soil_training_data")
+
+        assert len(rows) == 2076
+        assert requested_ranges == [(0, 999), (1000, 1999), (2000, 2999)]
+
+    def test_single_short_page_stops_immediately(self):
+        from ml.train import fetch_all_rows
+
+        class FakeQuery:
+            def range(self, start, end):
+                return self
+
+            def execute(self):
+                return type("R", (), {"data": [{"laboratory_code": "A"}]})()
+
+        class FakeClient:
+            def table(self, _name):
+                return type("T", (), {"select": lambda _self, _c: FakeQuery()})()
+
+        assert len(fetch_all_rows(FakeClient(), "t")) == 1

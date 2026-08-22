@@ -35,6 +35,18 @@ class TestHealth:
         assert body["artifacts_loaded"] is True
         assert body["model_version"]
 
+    def test_reports_the_serving_process_id(self, client):
+        """Promotion hot-swaps the model in one process's memory, so the
+        service is only correct under a single uvicorn worker. The unit file
+        forbids --workers N, but a runtime override wouldn't be caught by a
+        file check -- publishing the pid makes it observable instead: poll
+        /health a few times and differing pids mean more than one worker is
+        answering, and a promotion only reached one of them."""
+        import os
+
+        bodies = [client.get("/health").json() for _ in range(3)]
+        assert {body["pid"] for body in bodies} == {os.getpid()}
+
 
 class TestPredict:
     def test_returns_expected_shape(self, client):
@@ -48,13 +60,15 @@ class TestPredict:
     def test_remarks_are_derived_from_the_numerics(self, client):
         body = client.post("/predict", json=SAMPLE_PAYLOAD).json()
         assert body["derived_remarks"]["ph_remark"] == "SLIGHTLY ACIDIC"
-        assert body["derived_remarks"]["om_remark"] == "MODERATELY LOW"
+        assert body["derived_remarks"]["om_remark"] == "LOW"
         assert body["derived_remarks"]["p_remark"] == "HIGH"
-        assert body["derived_remarks"]["k_remark"] == "SUFFICIENT+"
+        assert body["derived_remarks"]["k_remark"] == "SUFFICIENT"
 
     def test_k_remark_uses_the_converted_ppm_value_not_the_raw_cmol_kg(self, client):
+        # Raw 0.35 cmol/kg would be "DEFICIENT" if the conversion were
+        # skipped (< 36 ppm); the converted ~137 ppm is "SUFFICIENT".
         body = client.post("/predict", json=SAMPLE_PAYLOAD).json()
-        assert body["derived_remarks"]["k_remark"] == "SUFFICIENT+"
+        assert body["derived_remarks"]["k_remark"] == "SUFFICIENT"
 
     def test_application_schedule_present_for_a_covered_crop(self, client):
         body = client.post("/predict", json=SAMPLE_PAYLOAD).json()
@@ -263,7 +277,7 @@ class TestValidation:
         assert client.post("/predict", json={"crop": "Corn"}).status_code == 422
 
     def test_unknown_crop_is_rejected_with_the_valid_list(self, client):
-        response = client.post("/predict", json={**SAMPLE_PAYLOAD, "crop": "Durian"})
+        response = client.post("/predict", json={**SAMPLE_PAYLOAD, "crop": "Nonesuch"})
         assert response.status_code == 422
         assert "Corn" in response.text
 
@@ -277,3 +291,56 @@ class TestLoggingIsNonFatal:
             raise RuntimeError("supabase unreachable")
         monkeypatch.setattr(service, "log_prediction", explode)
         assert client.post("/predict", json=SAMPLE_PAYLOAD).status_code == 200
+
+
+class TestAliasCrops:
+    def test_an_alias_crop_predicts_identically_to_its_canonical_crop(self, client):
+        from data.nutrient_recommendation_guide import CROP_ALIASES
+
+        if not CROP_ALIASES:
+            pytest.skip("no aliases registered yet")
+        alias, canonical = next(iter(CROP_ALIASES.items()))
+
+        alias_body = client.post("/predict", json={**SAMPLE_PAYLOAD, "crop": alias}).json()
+        canonical_body = client.post("/predict", json={**SAMPLE_PAYLOAD, "crop": canonical}).json()
+
+        assert alias_body["target_n"] == canonical_body["target_n"]
+        assert alias_body["target_p2o5"] == canonical_body["target_p2o5"]
+        assert alias_body["target_k2o"] == canonical_body["target_k2o"]
+
+
+class TestUntrainedCropGuard:
+    """A crop the model never saw must not get a model-path prediction --
+    its one-hot column was never active in training, so the answer would be
+    the global mean wearing a crop's name."""
+
+    def test_incomplete_request_for_an_untrained_crop_is_refused(self, client, monkeypatch):
+        import main as service
+
+        monkeypatch.setattr(service, "trained_crops", lambda bundle: {"Corn"})
+        response = client.post("/predict", json={
+            "crop": "Cabbage", "data_source": "stk", "ph": 6.4,
+        })
+        assert response.status_code == 422
+        body = response.json()
+        assert "Cabbage" in body["detail"]
+        assert "organic_matter_pct" in body["detail"]
+
+    def test_complete_request_for_an_untrained_crop_still_succeeds(self, client, monkeypatch):
+        """The guide table has the exact answer regardless of training data."""
+        import main as service
+
+        monkeypatch.setattr(service, "trained_crops", lambda bundle: {"Corn"})
+        response = client.post("/predict", json={
+            "crop": "Cabbage", "data_source": "lab", "ph": 6.4,
+            "organic_matter_pct": 2.8, "phosphorus_ppm": 18.0, "potassium_cmol_kg": 0.35,
+        })
+        assert response.status_code == 200
+        assert response.json()["source"] == "table-lookup"
+
+    def test_incomplete_request_for_a_trained_crop_still_succeeds(self, client):
+        response = client.post("/predict", json={
+            "crop": "Corn", "data_source": "iot", "ph": 6.4,
+        })
+        assert response.status_code == 200
+        assert response.json()["source"] == "ml-ensemble"

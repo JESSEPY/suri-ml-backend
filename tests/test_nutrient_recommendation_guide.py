@@ -106,7 +106,7 @@ class TestNutrientRequirements:
 
     def test_unknown_crop_raises(self):
         with pytest.raises(KeyError):
-            nutrient_requirements("Durian", om=2.5, p_ppm=15.0, k_cmol_kg=0.3)
+            nutrient_requirements("Nonesuch", om=2.5, p_ppm=15.0, k_cmol_kg=0.3)
 
     def test_variety_selects_a_different_guide_row(self):
         native = nutrient_requirements("Corn", om=1.0, p_ppm=15.0, k_cmol_kg=0.3, variety="OPV")
@@ -197,7 +197,7 @@ class TestMaxTotalNeed:
 
     def test_unknown_crop_raises(self):
         with pytest.raises(KeyError):
-            max_total_need("Durian")
+            max_total_need("Nonesuch")
 
     @pytest.mark.parametrize("crop", ["Rice", "Corn", "Cassava", "Peanut", "Tomato",
                                        "Mango", "Cacao", "Coconut", "Banana"])
@@ -207,3 +207,326 @@ class TestMaxTotalNeed:
         produce a need fraction > 1."""
         n, p, k = nutrient_requirements(crop, om=0.0, p_ppm=0.0, k_cmol_kg=0.0)
         assert n + p + k <= max_total_need(crop)
+
+
+class TestDerivedRegistry:
+    """The registry is derived from GUIDE_ROWS rather than restated by hand.
+    These pin the derivation to exactly today's values, so the refactor is
+    provably behaviour-preserving."""
+
+    def test_canonical_crops_match_the_guide_rows(self):
+        from data.nutrient_recommendation_guide import CANONICAL_CROPS, GUIDE_ROWS
+
+        expected = sorted({key.split("|", 1)[0] for key in GUIDE_ROWS})
+        assert CANONICAL_CROPS == expected
+
+    def test_the_nine_original_crops_are_all_present(self):
+        from data.nutrient_recommendation_guide import CROPS
+
+        for crop in ["Corn", "Rice", "Cassava", "Peanut", "Mango",
+                     "Cacao", "Banana", "Tomato", "Coconut"]:
+            assert crop in CROPS
+
+    def test_target_unit_is_derived_and_still_correct(self):
+        from data.nutrient_recommendation_guide import TARGET_UNIT
+
+        for crop in ["Rice", "Corn", "Cassava", "Peanut", "Tomato"]:
+            assert TARGET_UNIT[crop] == "kg_ha"
+        for crop in ["Mango", "Cacao", "Coconut", "Banana"]:
+            assert TARGET_UNIT[crop] == "kg_tree"
+
+    def test_every_crop_has_a_target_unit(self):
+        from data.nutrient_recommendation_guide import CANONICAL_CROPS, TARGET_UNIT
+
+        assert set(TARGET_UNIT) == set(CANONICAL_CROPS)
+
+    def test_a_crop_whose_rows_disagree_on_unit_is_rejected(self):
+        """A mixed-unit crop would make target_unit_for_crop() arbitrary."""
+        from data.nutrient_recommendation_guide import GuideRow, _derive_target_units
+
+        rows = {
+            "Bogus|A": GuideRow("kg_ha", ((2.0, 1),), ((6.0, 1),), ((35.0, 1),)),
+            "Bogus|B": GuideRow("kg_tree", ((2.0, 1),), ((6.0, 1),), ((35.0, 1),)),
+        }
+        with pytest.raises(ValueError, match="Bogus"):
+            _derive_target_units(rows)
+
+
+class TestGuideRowKeyGeneralization:
+    """Corn's Native/Hybrid split is a variety axis, same shape as the
+    sub-axes new crops need. Pinning it here guards the generalization."""
+
+    def test_corn_defaults_to_the_native_row(self):
+        from data.nutrient_recommendation_guide import _guide_row_key
+
+        assert _guide_row_key("Corn", None, None, None) == "Corn|Native"
+        assert _guide_row_key("Corn", "OPV", None, None) == "Corn|Native"
+        assert _guide_row_key("Corn", "Hybrid", None, None) == "Corn|Hybrid"
+
+    def test_rice_still_keys_on_cultivation_method(self):
+        from data.nutrient_recommendation_guide import _guide_row_key
+
+        assert _guide_row_key("Rice", None, None, None) == "Rice|Lowland Wet"
+        assert _guide_row_key("Rice", None, "Upland", None) == "Rice|Upland"
+
+    def test_tree_crops_still_key_on_age_band(self):
+        from data.nutrient_recommendation_guide import _guide_row_key
+
+        assert _guide_row_key("Coconut", None, None, None) == "Coconut|9yrs & up"
+        assert _guide_row_key("Coconut", None, None, "1-5yrs") == "Coconut|1-5yrs"
+
+    def test_unsplit_crops_key_on_the_bare_name(self):
+        from data.nutrient_recommendation_guide import _guide_row_key
+
+        assert _guide_row_key("Cassava", None, None, None) == "Cassava"
+
+
+class TestCropAliases:
+    def test_an_alias_resolves_to_its_canonical_crop(self):
+        from data.nutrient_recommendation_guide import CROP_ALIASES, resolve_crop
+
+        for alias, canonical in CROP_ALIASES.items():
+            assert resolve_crop(alias) == canonical
+
+    def test_a_canonical_crop_resolves_to_itself(self):
+        from data.nutrient_recommendation_guide import resolve_crop
+
+        assert resolve_crop("Cassava") == "Cassava"
+
+    def test_an_unknown_crop_raises(self):
+        from data.nutrient_recommendation_guide import resolve_crop
+
+        with pytest.raises(KeyError, match="Nonesuch"):
+            resolve_crop("Nonesuch")
+
+    def test_every_alias_points_at_a_real_canonical_crop(self):
+        from data.nutrient_recommendation_guide import CANONICAL_CROPS, CROP_ALIASES
+
+        for alias, canonical in CROP_ALIASES.items():
+            assert canonical in CANONICAL_CROPS, alias
+
+    def test_no_alias_shadows_a_canonical_crop(self):
+        from data.nutrient_recommendation_guide import CANONICAL_CROPS, CROP_ALIASES
+
+        assert not (set(CROP_ALIASES) & set(CANONICAL_CROPS))
+
+    def test_crops_exposes_canonical_names_and_aliases(self):
+        from data.nutrient_recommendation_guide import CANONICAL_CROPS, CROPS, CROP_ALIASES
+
+        assert set(CROPS) == set(CANONICAL_CROPS) | set(CROP_ALIASES)
+
+    def test_nutrient_requirements_accepts_an_alias(self):
+        from data.nutrient_recommendation_guide import CROP_ALIASES, nutrient_requirements
+
+        if not CROP_ALIASES:
+            pytest.skip("no aliases registered yet")
+        alias, canonical = next(iter(CROP_ALIASES.items()))
+        assert nutrient_requirements(alias, 2.5, 15.0, 0.3) == \
+               nutrient_requirements(canonical, 2.5, 15.0, 0.3)
+
+
+class TestVegetableRows:
+    """One assertion per band edge per crop. Values are the guide's own;
+    a failure here means either the transcription or the band arithmetic is
+    wrong, and both are worth failing loudly on."""
+
+    @pytest.mark.parametrize("crop,om,p,k,expected", [
+        # (crop, %OM, Olsen P ppm, K ppm, (N, P2O5, K2O))
+        ("Alugbati", 1.0, 3.0, 20.0, (90, 60, 60)),
+        ("Alugbati", 6.0, 35.0, 400.0, (0, 0, 0)),
+        ("Ampalaya", 1.0, 3.0, 20.0, (40, 80, 45)),
+        ("Asparagus", 3.0, 8.0, 45.0, (60, 30, 45)),
+        ("Cabbage", 1.0, 3.0, 20.0, (150, 80, 75)),
+        ("Cabbage", 5.0, 12.0, 100.0, (100, 40, 30)),
+        ("Cauliflower", 1.0, 3.0, 20.0, (90, 80, 90)),
+        ("Celery", 1.0, 3.0, 20.0, (60, 90, 60)),
+        ("Chayote", 1.0, 3.0, 20.0, (60, 80, 65)),
+        ("Cucumber", 1.0, 3.0, 20.0, (60, 100, 45)),
+        ("Eggplant", 1.0, 3.0, 20.0, (90, 80, 90)),
+        ("Lettuce", 1.0, 3.0, 20.0, (60, 60, 75)),
+        ("Radish", 1.0, 3.0, 20.0, (90, 90, 120)),
+        ("Radish", 3.0, 8.0, 280.0, (60, 60, 30)),
+        ("Squash", 1.0, 3.0, 20.0, (60, 80, 60)),
+        ("Strawberry", 1.0, 3.0, 20.0, (45, 30, 60)),
+    ])
+    def test_band_lookups(self, crop, om, p, k, expected):
+        from data.nutrient_recommendation_guide import K_CMOL_TO_PPM, nutrient_requirements
+
+        assert nutrient_requirements(crop, om, p, k / K_CMOL_TO_PPM) == expected
+
+    def test_all_vegetables_are_per_hectare(self):
+        from data.nutrient_recommendation_guide import target_unit_for_crop
+
+        for crop in ["Alugbati", "Ampalaya", "Asparagus", "Cabbage", "Cauliflower",
+                     "Celery", "Chayote", "Cucumber", "Eggplant", "Lettuce",
+                     "Radish", "Squash", "Strawberry"]:
+            assert target_unit_for_crop(crop) == "kg_ha"
+
+    @pytest.mark.parametrize("alias,canonical", [
+        ("Kangkong", "Alugbati"), ("Pechay", "Cabbage"), ("Mustard", "Cabbage"),
+        ("Spinach", "Cabbage"), ("Broccoli", "Cabbage"), ("Muskmelon", "Cucumber"),
+        ("Watermelon", "Cucumber"), ("Okra", "Eggplant"), ("Malunggay", "Lettuce"),
+        ("Carrots", "Radish"), ("Upo", "Squash"), ("Patola", "Squash"),
+    ])
+    def test_co_listed_species_alias_to_their_row(self, alias, canonical):
+        from data.nutrient_recommendation_guide import resolve_crop
+
+        assert resolve_crop(alias) == canonical
+
+
+class TestCondimentRootcropAndLegumeRows:
+    @pytest.mark.parametrize("crop,om,p,k,expected", [
+        ("Garlic", 1.0, 3.0, 20.0, (120, 80, 150)),
+        ("Garlic", 6.0, 35.0, 400.0, (0, 0, 0)),
+        ("Onion", 1.0, 3.0, 20.0, (120, 80, 150)),
+        ("Gabi", 1.0, 3.0, 20.0, (40, 60, 90)),
+        ("Potato", 1.0, 3.0, 20.0, (120, 100, 120)),
+        ("Beans", 1.0, 3.0, 20.0, (10, 60, 60)),
+        ("Peas", 1.0, 3.0, 20.0, (20, 40, 45)),
+        ("Sugarcane", 1.0, 3.0, 20.0, (180, 120, 160)),
+        ("Sugarcane", 5.0, 18.0, 280.0, (75, 20, 60)),
+    ])
+    def test_band_lookups(self, crop, om, p, k, expected):
+        from data.nutrient_recommendation_guide import K_CMOL_TO_PPM, nutrient_requirements
+
+        assert nutrient_requirements(crop, om, p, k / K_CMOL_TO_PPM) == expected
+
+    def test_ginger_defaults_to_the_improved_row(self):
+        from data.nutrient_recommendation_guide import K_CMOL_TO_PPM, nutrient_requirements
+
+        k = 20.0 / K_CMOL_TO_PPM
+        assert nutrient_requirements("Ginger", 1.0, 3.0, k) == (60, 60, 120)
+        assert nutrient_requirements("Ginger", 1.0, 3.0, k, variety="Local") == (40, 50, 90)
+
+    def test_onion_spring_is_a_separate_row(self):
+        from data.nutrient_recommendation_guide import K_CMOL_TO_PPM, nutrient_requirements
+
+        k = 20.0 / K_CMOL_TO_PPM
+        assert nutrient_requirements("Onion", 1.0, 3.0, k, variety="Spring") == (130, 60, 45)
+
+    @pytest.mark.parametrize("alias,canonical", [
+        ("Chili Pepper", "Garlic"),
+        ("Camote", "Cassava"),
+        ("Ube", "Gabi"),
+        ("Yam", "Gabi"), ("Taro", "Gabi"), ("Singkamas", "Potato"),
+        ("Sitao", "Beans"), ("Lima", "Beans"), ("Cowpea", "Peas"), ("Tapilan", "Peas"),
+    ])
+    def test_co_listed_species_alias_to_their_row(self, alias, canonical):
+        from data.nutrient_recommendation_guide import resolve_crop
+
+        assert resolve_crop(alias) == canonical
+
+
+class TestFreeSpeciesAliases:
+    @pytest.mark.parametrize("alias,canonical", [
+        ("Sorghum", "Corn"), ("Camote", "Cassava"), ("Yacon", "Cassava"),
+        ("Soybean", "Peanut"), ("Mongo", "Peanut"), ("Santol", "Mango"),
+        ("Caimito", "Mango"), ("Durian", "Mango"), ("Marang", "Mango"),
+    ])
+    def test_alias_resolves_and_predicts_identically(self, alias, canonical):
+        from data.nutrient_recommendation_guide import nutrient_requirements, resolve_crop
+
+        assert resolve_crop(alias) == canonical
+        assert nutrient_requirements(alias, 2.5, 15.0, 0.3) == \
+               nutrient_requirements(canonical, 2.5, 15.0, 0.3)
+
+    def test_tree_crop_aliases_keep_the_tree_unit(self):
+        from data.nutrient_recommendation_guide import target_unit_for_crop
+
+        for alias in ["Santol", "Caimito", "Durian", "Marang"]:
+            assert target_unit_for_crop(alias) == "kg_tree"
+
+
+class TestPhase2TreeAndPlantationCrops:
+    """Age-banded tree crops plus Pineapple's Planted/Ratoon cycle axis.
+    Every expectation reads the lowest band of each class (poorest soil), so
+    a transposed column would fail loudly."""
+
+    @pytest.mark.parametrize("crop,expected", [
+        ("Pineapple", (300, 80, 180)),
+        ("Avocado", (0.3, 0.3, 0.6)),
+        ("Citrus", (0.5, 0.5, 0.75)),
+        ("Guava", (0.05, 0.3, 0.6)),
+        ("Lanzones", (0.4, 0.8, 1.2)),
+    ])
+    def test_poorest_soil_at_the_default_stage(self, crop, expected):
+        from data.nutrient_recommendation_guide import K_CMOL_TO_PPM, nutrient_requirements
+
+        assert nutrient_requirements(crop, 1.0, 3.0, 20.0 / K_CMOL_TO_PPM) == expected
+
+    def test_pineapple_ratoon_is_a_separate_row(self):
+        from data.nutrient_recommendation_guide import K_CMOL_TO_PPM, nutrient_requirements
+
+        k = 20.0 / K_CMOL_TO_PPM
+        assert nutrient_requirements("Pineapple", 1.0, 3.0, k, variety="Ratoon") == (150, 40, 120)
+
+    def test_pineapple_defaults_to_the_planted_row(self):
+        from data.nutrient_recommendation_guide import K_CMOL_TO_PPM, nutrient_requirements
+
+        k = 20.0 / K_CMOL_TO_PPM
+        assert nutrient_requirements("Pineapple", 1.0, 3.0, k) == \
+               nutrient_requirements("Pineapple", 1.0, 3.0, k, variety="Planted")
+
+    def test_pineapple_is_the_only_per_hectare_crop_added_here(self):
+        from data.nutrient_recommendation_guide import target_unit_for_crop
+
+        assert target_unit_for_crop("Pineapple") == "kg_ha"
+        for crop in ["Avocado", "Citrus", "Guava", "Lanzones"]:
+            assert target_unit_for_crop(crop) == "kg_tree"
+
+    @pytest.mark.parametrize("crop,age_band,expected", [
+        ("Avocado", "NT", (0.01, 0.01, 0.015)),
+        ("Avocado", "1-3 yrs", (0.1, 0.1, 0.3)),
+        ("Lanzones", "NT", (0.01, 0.02, 0.08)),
+        ("Guava", "1-3 yrs", (0.02, 0.1, 0.3)),
+        ("Citrus", "NT", (0.01, 0.01, 0.015)),
+    ])
+    def test_explicit_age_bands(self, crop, age_band, expected):
+        from data.nutrient_recommendation_guide import K_CMOL_TO_PPM, nutrient_requirements
+
+        assert nutrient_requirements(
+            crop, 1.0, 3.0, 20.0 / K_CMOL_TO_PPM, age_band=age_band
+        ) == expected
+
+    def test_citrus_five_year_row_uses_the_restored_decimals(self):
+        """The source prints K 0-35 as '.03' and K 36-55 as '15'; both are
+        missing decimal points. Restoring them keeps the row monotonic and
+        continues the 4yrs -> 6-10yrs progression."""
+        from data.nutrient_recommendation_guide import K_CMOL_TO_PPM, nutrient_requirements
+
+        assert nutrient_requirements(
+            "Citrus", 1.0, 3.0, 20.0 / K_CMOL_TO_PPM, age_band="5 yrs"
+        ) == (0.15, 0.2, 0.3)
+        assert nutrient_requirements(
+            "Citrus", 1.0, 3.0, 45.0 / K_CMOL_TO_PPM, age_band="5 yrs"
+        ) == (0.15, 0.2, 0.15)
+
+    def test_guava_third_row_is_registered_as_seven_years_and_up(self):
+        from data.nutrient_recommendation_guide import GUIDE_ROWS
+
+        assert "Guava|7 yrs & up" in GUIDE_ROWS
+        assert "Guava|4-6 yrs" in GUIDE_ROWS
+
+    @pytest.mark.parametrize("alias,canonical", [
+        ("Guyabano", "Avocado"), ("Atis", "Avocado"), ("Chico", "Avocado"),
+        ("Jackfruit", "Avocado"), ("Cashew", "Avocado"),
+        ("Calamansi", "Citrus"), ("Lime", "Citrus"), ("Orange", "Citrus"),
+        ("Passion Fruit", "Citrus"),
+        ("Rambutan", "Lanzones"), ("Mangosteen", "Lanzones"),
+    ])
+    def test_co_listed_species_alias_to_their_row(self, alias, canonical):
+        from data.nutrient_recommendation_guide import resolve_crop
+
+        assert resolve_crop(alias) == canonical
+
+    def test_every_age_banded_crop_has_a_bearing_default(self):
+        """resolve_age_band() falls back to BEARING_AGE_BAND when the caller
+        omits age_band; a crop with age rows but no entry there would key to
+        'None' and raise KeyError on every request."""
+        from data.nutrient_recommendation_guide import BEARING_AGE_BAND, GUIDE_ROWS
+
+        for crop in ["Papaya", "Avocado", "Citrus", "Guava", "Lanzones"]:
+            if not any(key.startswith(f"{crop}|") for key in GUIDE_ROWS):
+                continue  # Papaya may have been omitted -- see Step 0
+            assert crop in BEARING_AGE_BAND
+            assert f"{crop}|{BEARING_AGE_BAND[crop]}" in GUIDE_ROWS
