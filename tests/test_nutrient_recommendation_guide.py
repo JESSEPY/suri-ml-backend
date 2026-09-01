@@ -76,6 +76,22 @@ class TestResolvers:
         assert resolve_variety("Corn", "Inbred") == "None"
 
 
+class TestGeneralizedResolution:
+    def test_rice_cultivation_method_still_resolves_via_dict_not_name_check(self):
+        assert resolve_cultivation_method("Rice", "Upland") == "Upland"
+        assert resolve_cultivation_method("Rice", None) == "Lowland Wet"
+        assert resolve_cultivation_method("Rice", "not-a-real-method") == "Lowland Wet"
+
+    def test_non_rice_crop_has_no_cultivation_method_axis(self):
+        assert resolve_cultivation_method("Corn", "Upland") == "None"
+
+    def test_banana_still_resolves_to_fruit_row_via_default_variety_row(self):
+        n, p, k = nutrient_requirements("Banana", om=3.0, p_ppm=8.0, k_cmol_kg=0.2)
+        assert (n, p, k) == nutrient_requirements(
+            "Banana", om=3.0, p_ppm=8.0, k_cmol_kg=0.2, variety="anything-unrecognized"
+        )
+
+
 class TestNutrientRequirements:
     def test_returns_a_numeric_triple(self):
         n, p, k = nutrient_requirements("Corn", om=2.5, p_ppm=15.0, k_cmol_kg=0.3)

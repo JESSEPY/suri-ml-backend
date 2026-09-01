@@ -140,7 +140,20 @@ BEARING_AGE_BAND: dict[str, str] = {
     "Guava": "7 yrs & up", "Lanzones": "7 yrs & up",
 }
 
-RICE_CULTIVATION_METHODS = ("Upland", "Lowland Wet", "Lowland Dry")
+# crop -> the cultivation_method strings its guide rows distinguish. Rice is
+# the only crop today, but this is a generic dict (not a Rice-specific
+# constant) so a future crop with its own cultivation_method split needs no
+# code change here -- just its own crop_variants rows (see the crop-reference
+# CMS loader).
+CULTIVATION_METHODS_BY_CROP: dict[str, tuple[str, ...]] = {
+    "Rice": ("Upland", "Lowland Wet", "Lowland Dry"),
+}
+
+# crop -> the cultivation_method row used when the caller supplies nothing
+# or an unrecognized value. Generalizes the previous hardcoded "Lowland Wet".
+DEFAULT_CULTIVATION_METHOD_ROW: dict[str, str] = {
+    "Rice": "Lowland Wet",
+}
 
 # crop -> the variety strings its guide rows actually distinguish. Every
 # other crop's variety is always "None" -- the guide has no per-variety
@@ -708,6 +721,17 @@ DEFAULT_VARIETY_ROW: dict[str, str] = {
     "Ginger": "Improved",
     "Onion": "Bulb",
     "Pineapple": "Planted",
+    # Banana has no VARIETIES_BY_CROP entry (no selectable variety), so
+    # resolve_variety() always returns "None" for it -- "Banana|None" is
+    # never a real GUIDE_ROWS key, so _guide_row_key falls through to this
+    # default exactly like Corn/Ginger/Onion/Pineapple do when their
+    # request supplies an unrecognized variety. Replaces the old hardcoded
+    # `if crop == "Banana": return "Banana|Fruit"` branch. Note: the guide
+    # also has a "Banana|Pulp" row -- unreachable before this change (the
+    # old code hardcoded Fruit unconditionally) and still unreachable after
+    # it (no variety axis is defined for Banana); see the design spec's
+    # "not preserved" note on this if Pulp coverage is ever wanted.
+    "Banana": "Fruit",
 }
 
 
@@ -746,11 +770,13 @@ def resolve_variety(crop: str, variety: str | None) -> str:
 
 
 def resolve_cultivation_method(crop: str, cultivation_method: str | None) -> str:
-    if resolve_crop(crop) != "Rice":
+    canonical = resolve_crop(crop)
+    options = CULTIVATION_METHODS_BY_CROP.get(canonical)
+    if options is None:
         return "None"
-    if cultivation_method in RICE_CULTIVATION_METHODS:
+    if cultivation_method in options:
         return cultivation_method
-    return "Lowland Wet"
+    return DEFAULT_CULTIVATION_METHOD_ROW[canonical]
 
 
 def resolve_age_band(crop: str, age_band: str | None) -> str:
@@ -765,16 +791,14 @@ def resolve_age_band(crop: str, age_band: str | None) -> str:
 def _guide_row_key(
     crop: str, variety: str | None, cultivation_method: str | None, age_band: str | None,
 ) -> str:
-    if crop == "Rice":
-        return f"Rice|{resolve_cultivation_method(crop, cultivation_method)}"
+    if crop in CULTIVATION_METHODS_BY_CROP:
+        return f"{crop}|{resolve_cultivation_method(crop, cultivation_method)}"
     if crop in DEFAULT_VARIETY_ROW:
         resolved = resolve_variety(crop, variety)
         label = resolved if f"{crop}|{resolved}" in GUIDE_ROWS else DEFAULT_VARIETY_ROW[crop]
         return f"{crop}|{label}"
     if crop in BEARING_AGE_BAND:
         return f"{crop}|{resolve_age_band(crop, age_band)}"
-    if crop == "Banana":
-        return "Banana|Fruit"
     return crop
 
 
