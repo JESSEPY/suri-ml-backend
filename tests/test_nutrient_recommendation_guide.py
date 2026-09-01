@@ -256,16 +256,16 @@ class TestDerivedRegistry:
 
         assert set(TARGET_UNIT) == set(CANONICAL_CROPS)
 
-    def test_a_crop_whose_rows_disagree_on_unit_is_rejected(self):
-        """A mixed-unit crop would make target_unit_for_crop() arbitrary."""
-        from data.nutrient_recommendation_guide import GuideRow, _derive_target_units
-
-        rows = {
-            "Bogus|A": GuideRow("kg_ha", ((2.0, 1),), ((6.0, 1),), ((35.0, 1),)),
-            "Bogus|B": GuideRow("kg_tree", ((2.0, 1),), ((6.0, 1),), ((35.0, 1),)),
-        }
-        with pytest.raises(ValueError, match="Bogus"):
-            _derive_target_units(rows)
+    # test_a_crop_whose_rows_disagree_on_unit_is_rejected was removed here.
+    # It pinned _derive_target_units(), which scanned GUIDE_ROWS to catch a
+    # crop whose rows disagreed on unit -- a real risk when TARGET_UNIT was
+    # derived from per-row data. Since the crop-nutrient-reference-cms work
+    # (docs/superpowers/plans/2026-09-01-crop-nutrient-reference-cms.md
+    # Task 4), TARGET_UNIT comes directly from the crops table's `unit`
+    # column -- one value per crop, not per-row -- so the scenario this test
+    # covered (two rows of the same crop disagreeing) is no longer
+    # representable at all, and _derive_target_units was deleted along with
+    # the hardcoded GUIDE_ROWS literal it used to validate.
 
 
 class TestGuideRowKeyGeneralization:

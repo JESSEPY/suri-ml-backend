@@ -14,8 +14,9 @@ import random
 
 import pandas as pd
 
+from data import nutrient_recommendation_guide as guide
 from data.nutrient_recommendation_guide import (
-    CROPS, target_unit_for_crop, resolve_crop, resolve_variety, resolve_cultivation_method, resolve_age_band,
+    target_unit_for_crop, resolve_crop, resolve_variety, resolve_cultivation_method, resolve_age_band,
 )
 from ml.agronomy import nutrient_requirements, total_nitrogen_from_om
 from ml.recipes import plan_applications
@@ -39,7 +40,7 @@ def sample_training_frame(num_records: int = 200, seed: int = 42) -> pd.DataFram
     rows: list[dict] = []
 
     for index in range(num_records):
-        crop_name = rng.choice(CROPS)
+        crop_name = rng.choice(guide.CROPS)
         crop = resolve_crop(crop_name)
         ph = round(rng.uniform(4.5, 8.5), 2)
         om = round(rng.uniform(0.5, 5.0), 2)

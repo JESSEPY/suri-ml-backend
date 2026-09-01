@@ -98,6 +98,21 @@ def main() -> None:
             *_band_pairs(row.k_bands, 5),
         ])
 
+    # Declaration-only rows: a crop can track a variety axis for ML feature
+    # purposes WITHOUT that axis determining which GUIDE_ROWS row is used --
+    # Rice is the one case today (its row is picked by cultivation_method;
+    # variety (Hybrid/Inbred) is tracked in VARIETIES_BY_CROP purely as an
+    # additional one-hot feature, never referenced by _guide_row_key). Such
+    # a crop's variety options would otherwise never be exported at all,
+    # since the loop above only emits ONE dimension per crop (whichever one
+    # _dimension_for() says determines its guide row). These rows carry no
+    # band data and no unit -- they only register crop_variants entries.
+    for crop, varieties in sorted(VARIETIES_BY_CROP.items()):
+        if _dimension_for(crop) == "variety":
+            continue  # already covered by the per-target-row loop above
+        for variety in varieties:
+            writer.writerow([crop, "", "variety", variety, "false", "", *([""] * 32)])
+
     for alias, canonical in sorted(CROP_ALIASES.items()):
         writer.writerow([alias, canonical, "", "", "", "", *([""] * 32)])
 
