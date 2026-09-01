@@ -25,8 +25,9 @@ from starlette.concurrency import run_in_threadpool
 
 from data.ingest_to_supabase import TABLE as TRAINING_TABLE, ingest_records
 from data.mode_of_application import application_schedule_for_crop
+from data import nutrient_recommendation_guide as guide
 from data.nutrient_recommendation_guide import (
-    CROPS, k_cmol_to_ppm, max_total_need, nutrient_requirements, resolve_age_band,
+    k_cmol_to_ppm, max_total_need, nutrient_requirements, resolve_age_band,
     resolve_crop, resolve_cultivation_method, resolve_variety, target_unit_for_crop,
 )
 from data.training_upload import (
@@ -103,8 +104,8 @@ class SoilTestRequest(BaseModel):
     @field_validator("crop")
     @classmethod
     def crop_must_be_known(cls, value: str) -> str:
-        if value not in CROPS:
-            raise ValueError(f"Unknown crop '{value}'. Valid crops: {', '.join(CROPS)}")
+        if value not in guide.CROPS:
+            raise ValueError(f"Unknown crop '{value}'. Valid crops: {', '.join(guide.CROPS)}")
         return value
 
     def is_complete(self) -> bool:

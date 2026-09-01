@@ -2,10 +2,11 @@ import pandas as pd
 import pytest
 from sklearn.exceptions import NotFittedError
 
+import data.nutrient_recommendation_guide as guide
 from tests.fixtures import sample_training_frame
 from ml.preprocessing import (
-    build_preprocessor, FEATURE_COLUMNS, CONTINUOUS, ORDERED, NOMINAL,
-    TARGET_COLUMNS, VARIETIES, CULTIVATION_METHODS, AGE_BANDS,
+    build_preprocessor, build_categories, FEATURE_COLUMNS, CONTINUOUS, ORDERED,
+    NOMINAL, TARGET_COLUMNS,
 )
 
 
@@ -109,3 +110,19 @@ class TestAgeBandEncoding:
         row = pd.DataFrame([{**_base_row(), "crop": "Coconut", "age_band": "bearing"}])[FEATURE_COLUMNS]
         with pytest.raises(ValueError):
             fitted.transform(row)
+
+
+class TestBuildCategoriesReflectsLiveGuideState:
+    def test_adding_a_crop_variant_to_the_module_is_picked_up_without_reimport(self):
+        """build_categories() must re-derive from guide.VARIETIES_BY_CROP etc.
+        at CALL time, not read a module-level constant computed once at
+        ml.preprocessing's own import time -- otherwise a reload-guide
+        endpoint reassigning guide.VARIETIES_BY_CROP would have no visible
+        effect on the encoder's vocabulary."""
+        original = dict(guide.VARIETIES_BY_CROP)
+        try:
+            guide.VARIETIES_BY_CROP = {**original, "TestCrop": ("TestVariety",)}
+            categories = build_categories()
+            assert "TestVariety" in categories["varieties"]
+        finally:
+            guide.VARIETIES_BY_CROP = original
