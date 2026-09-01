@@ -272,11 +272,21 @@ class TestGuideRowKeyGeneralization:
     """Corn's Native/Hybrid split is a variety axis, same shape as the
     sub-axes new crops need. Pinning it here guards the generalization."""
 
-    def test_corn_defaults_to_the_native_row(self):
+    def test_corn_defaults_to_the_opv_row(self):
+        # Pre-migration, the hardcoded GUIDE_ROWS literal named this row
+        # "Native" internally while VARIETIES_BY_CROP offered "OPV" as the
+        # actual selectable option a user picked -- an unmatched "OPV" fell
+        # back to the "Native"-named row via DEFAULT_VARIETY_ROW. Now that
+        # crop_nutrient_targets.variant_key IS the row key (guide_source.py
+        # builds GUIDE_ROWS from it directly), that naming mismatch has no
+        # representation left to seed: the row is seeded, and therefore
+        # named, after the real selectable default, "OPV". No fallback
+        # needed for the case this test used to exercise; "OPV" now hits
+        # directly, same as any other crop's default option.
         from data.nutrient_recommendation_guide import _guide_row_key
 
-        assert _guide_row_key("Corn", None, None, None) == "Corn|Native"
-        assert _guide_row_key("Corn", "OPV", None, None) == "Corn|Native"
+        assert _guide_row_key("Corn", None, None, None) == "Corn|OPV"
+        assert _guide_row_key("Corn", "OPV", None, None) == "Corn|OPV"
         assert _guide_row_key("Corn", "Hybrid", None, None) == "Corn|Hybrid"
 
     def test_rice_still_keys_on_cultivation_method(self):

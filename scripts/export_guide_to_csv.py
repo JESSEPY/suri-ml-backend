@@ -15,7 +15,7 @@ import sys
 from data.nutrient_recommendation_guide import (
     BEARING_AGE_BAND, CROP_ALIASES, CULTIVATION_METHODS_BY_CROP,
     DEFAULT_CULTIVATION_METHOD_ROW, DEFAULT_VARIETY_ROW, GUIDE_ROWS,
-    TARGET_UNIT, VARIETIES_BY_CROP,
+    TARGET_UNIT, VARIETIES_BY_CROP, _guide_row_key,
 )
 
 # Explicit (bound, rate) pairs, not rate-only columns against an assumed
@@ -76,27 +76,57 @@ def _band_pairs(bands: tuple, count: int) -> list[str]:
     return cells
 
 
+def _variant_keys_for_row(crop: str, dimension: str, row_key_suffix: str) -> list[str]:
+    """The GUIDE_ROWS key suffix is usually the same string as the
+    user-facing selectable option (Rice's cultivation_method values ARE its
+    row-key names; Ginger/Onion/Pineapple's varieties are too) -- but not
+    always. Corn's row is internally named "Native", while the actual
+    selectable variety a user picks for that row is "OPV"
+    (VARIETIES_BY_CROP["Corn"] = ("OPV", "Hybrid")); _guide_row_key falls
+    back from an unmatched "OPV" to DEFAULT_VARIETY_ROW["Corn"] = "Native"
+    at read time. Exporting "Native" as the crop_variants option_value (as
+    an earlier version of this script did) seeds a selectable option real
+    users never picked, silently losing "OPV" -- which then reappears as an
+    "unknown category" when historical training rows that used it are
+    reprocessed. Only "variety" needs this: cultivation_method/age_band
+    have no such fallback-renaming case today."""
+    if dimension != "variety":
+        return [row_key_suffix]
+    options = VARIETIES_BY_CROP.get(crop, ())
+    if row_key_suffix in options:
+        return [row_key_suffix]
+    matches = [v for v in options if _guide_row_key(crop, v, None, None) == f"{crop}|{row_key_suffix}"]
+    return matches or [row_key_suffix]
+
+
 def main() -> None:
     writer = csv.writer(sys.stdout)
     writer.writerow(HEADER)
 
     for key, row in GUIDE_ROWS.items():
         if "|" in key:
-            crop, variant_key = key.split("|", 1)
+            crop, row_key_suffix = key.split("|", 1)
         else:
-            crop, variant_key = key, ""
+            crop, row_key_suffix = key, ""
 
-        dimension = _dimension_for(crop) if variant_key else ""
-        is_default = ""
-        if dimension:
-            is_default = "true" if _default_for(crop, dimension) == variant_key else "false"
+        dimension = _dimension_for(crop) if row_key_suffix else ""
+        variant_keys = _variant_keys_for_row(crop, dimension, row_key_suffix) if row_key_suffix else [""]
 
-        writer.writerow([
-            crop, "", dimension, variant_key, is_default, row.unit,
-            *_band_pairs(row.om_bands, 5),
-            *_band_pairs(row.p_bands, 6),
-            *_band_pairs(row.k_bands, 5),
-        ])
+        for variant_key in variant_keys:
+            is_default = ""
+            if dimension:
+                # Compared against the row-key suffix (what DEFAULT_VARIETY_ROW/
+                # DEFAULT_CULTIVATION_METHOD_ROW/BEARING_AGE_BAND actually store),
+                # not variant_key -- correct even when they differ, since Corn's
+                # DEFAULT_VARIETY_ROW literally holds "Native", not "OPV".
+                is_default = "true" if _default_for(crop, dimension) == row_key_suffix else "false"
+
+            writer.writerow([
+                crop, "", dimension, variant_key, is_default, row.unit,
+                *_band_pairs(row.om_bands, 5),
+                *_band_pairs(row.p_bands, 6),
+                *_band_pairs(row.k_bands, 5),
+            ])
 
     # Declaration-only rows: a crop can track a variety axis for ML feature
     # purposes WITHOUT that axis determining which GUIDE_ROWS row is used --
