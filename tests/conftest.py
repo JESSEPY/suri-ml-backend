@@ -22,6 +22,18 @@ that case nothing is cleaned up afterward, since nothing was created.
 Otherwise the bootstrap artifact is removed again in pytest_unconfigure, so
 a local `pytest` run doesn't silently leave the clean-slate demo state
 dirty for whoever's working here interactively.
+
+Also populates data.nutrient_recommendation_guide's module state (GUIDE_ROWS,
+CROPS, VARIETIES_BY_CROP, etc.) here, before anything else imports that
+module. Since the crop-nutrient-reference-cms work
+(docs/superpowers/plans/2026-09-01-crop-nutrient-reference-cms.md Task 4),
+that state is no longer a hardcoded literal -- it's loaded via
+reload_guide(), which normally hits a live Supabase project. Tests inject a
+fake client instead (tests/guide_fixture.py, built from the committed
+tests/fixtures/crop_reference_seed.csv, the same historical dataset the old
+literal held), so the whole suite -- including this file's own
+sample_training_frame() call below, which needs guide.CROPS non-empty --
+stays network-free.
 """
 
 import os
@@ -32,6 +44,11 @@ _bootstrapped_version: str | None = None
 
 def pytest_configure(config):
     global _bootstrapped_version
+
+    import data.nutrient_recommendation_guide as guide
+    from tests.guide_fixture import load_fixture_client
+
+    guide.reload_guide(client=load_fixture_client())
 
     from ml.model_state import available_versions
     from ml.train import ARTIFACT_ROOT, train

@@ -22,8 +22,9 @@ import openpyxl
 from ml.agronomy import nutrient_requirements, total_nitrogen_from_om
 from ml.recipes import plan_applications
 from ml.remarks import derive_k_remark, derive_om_remark, derive_p_remark, derive_ph_remark
+from data import nutrient_recommendation_guide as guide
 from data.nutrient_recommendation_guide import (
-    CANONICAL_CROPS, BEARING_AGE_BAND, k_cmol_to_ppm, target_unit_for_crop,
+    k_cmol_to_ppm, target_unit_for_crop,
     resolve_variety, resolve_cultivation_method, resolve_age_band,
 )
 
@@ -188,7 +189,7 @@ def normalize_crop(raw_text: str | None) -> tuple[str, str | None] | None:
         if text == key or text.startswith(key + " "):
             mapped = CROP_VARIETY_MAP[key]
             break
-    if mapped is None or mapped[0] not in CANONICAL_CROPS:
+    if mapped is None or mapped[0] not in guide.CANONICAL_CROPS:
         return None
     return mapped
 

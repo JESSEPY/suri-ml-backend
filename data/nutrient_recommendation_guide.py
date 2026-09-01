@@ -93,7 +93,7 @@ Global Constraint on this point.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from data.guide_source import GuideRow, build_guide_source  # noqa: F401 (GuideRow re-exported for existing callers)
 
 # cmol(+)/kg -> mg/kg (ppm) for potassium: equivalent weight 39.1 g/mol,
 # charge 1 -> 1 cmol/kg = 10 mmol/kg x 39.1 mg/mmol = 391 mg/kg.
@@ -112,14 +112,6 @@ def k_cmol_to_ppm(k_cmol_kg: float) -> float:
     return k_cmol_kg * K_CMOL_TO_PPM
 
 
-@dataclass(frozen=True)
-class GuideRow:
-    unit: str  # "kg_ha" or "kg_tree"
-    om_bands: tuple[tuple[float, float], ...]
-    p_bands: tuple[tuple[float, float], ...]
-    k_bands: tuple[tuple[float, float], ...]
-
-
 def _band_value(value: float, bands: tuple[tuple[float, float], ...]) -> float:
     # Bands are printed in the guide as e.g. "0-2.0" then "2.1-3.5" -- a 0.1
     # gap between the printed labels, not a continuous boundary. The stored
@@ -132,561 +124,72 @@ def _band_value(value: float, bands: tuple[tuple[float, float], ...]) -> float:
     return bands[-1][1]
 
 
-# crop -> its guide row-label for the mature/fruit-bearing stage, used when
-# a request passes the "bearing" alias (or omits age_band entirely).
-BEARING_AGE_BAND: dict[str, str] = {
-    "Coconut": "9yrs & up", "Cacao": "Over 7yrs", "Mango": "10yrs & up",
-    "Avocado": "7 yrs & up", "Citrus": "15 yrs & up",
-    "Guava": "7 yrs & up", "Lanzones": "7 yrs & up",
-}
-
-RICE_CULTIVATION_METHODS = ("Upland", "Lowland Wet", "Lowland Dry")
-
-# crop -> the variety strings its guide rows actually distinguish. Every
-# other crop's variety is always "None" -- the guide has no per-variety
-# rows for them, so accepting an arbitrary variety string would just be an
-# unseen, meaningless one-hot combination at training/serving time.
-VARIETIES_BY_CROP: dict[str, tuple[str, ...]] = {
-    "Rice": ("Hybrid", "Inbred"),
-    "Corn": ("OPV", "Hybrid"),
-    "Ginger": ("Improved", "Local"),
-    "Onion": ("Bulb", "Spring"),
-    "Pineapple": ("Planted", "Ratoon"),
-}
-
-# Guide row key -> GuideRow. Keys: bare crop name for crops the guide
-# doesn't further split (Cassava, Peanut, Tomato, Banana); "{crop}|{axis
-# value}" for Rice (cultivation_method), Corn (Native/Hybrid), and the
-# age-banded tree crops (Coconut/Cacao/Mango). A planned "Coffee|..." row,
-# included solely for a pptx golden-record cross-check, was removed --
-# Coffee was never in CROPS, and the cross-check itself was abandoned as
-# unverifiable (see the module docstring above).
-GUIDE_ROWS: dict[str, GuideRow] = {
-    "Rice|Upland": GuideRow(
-        "kg_ha",
-        om_bands=((2.0, 45), (3.5, 40), (4.5, 35), (5.5, 30), (float("inf"), 0)),
-        p_bands=((6.0, 60), (10.0, 40), (15.0, 30), (20.0, 20), (float("inf"), 0)),
-        # K re-verified: the source PDF's Upland row reads 60/45/30/0/0, not
-        # .../20/0 -- the 251-300 column is "0" here (unlike the Lowland
-        # Wet/Dry rows, which are "20").
-        k_bands=((35.0, 60), (55.0, 45), (250.0, 30), (300.0, 0), (float("inf"), 0)),
-    ),
-    "Rice|Lowland Wet": GuideRow(
-        "kg_ha",
-        # OM/P re-verified against the source PDF (see Task 1 manual cross-check):
-        # OM row reads 90/60/40/35/20, not 90/75/60/45/20; the P row's Olsen
-        # columns read 60/45/30/20/20/0 -- the "20" rate spans the 15.1-20.0
-        # AND 20.1-30.0 Olsen columns, so the correct upper bound is 30, not 20.
-        om_bands=((2.0, 90), (3.5, 60), (4.5, 40), (5.5, 35), (float("inf"), 20)),
-        p_bands=((6.0, 60), (10.0, 45), (15.0, 30), (30.0, 20), (float("inf"), 0)),
-        k_bands=((35.0, 60), (55.0, 45), (250.0, 30), (300.0, 20), (float("inf"), 0)),
-    ),
-    "Rice|Lowland Dry": GuideRow(
-        "kg_ha",
-        # OM last band re-verified as 45 (not 20) -- the source PDF's Dry row
-        # reads 120/75/60/45/45, i.e. the >5.6 OM column repeats the 4.6-5.5
-        # value rather than dropping to the Wet row's 20. P has the same
-        # 15.1-20.0/20.1-30.0 both-"20" collapse as Lowland Wet above.
-        om_bands=((2.0, 120), (3.5, 75), (4.5, 60), (5.5, 45), (float("inf"), 45)),
-        p_bands=((6.0, 60), (10.0, 45), (15.0, 30), (30.0, 20), (float("inf"), 0)),
-        k_bands=((35.0, 60), (55.0, 45), (250.0, 30), (300.0, 20), (float("inf"), 0)),
-    ),
-    "Corn|Native": GuideRow(
-        "kg_ha",
-        # P/K re-verified: the source PDF's Native row reads P
-        # 60/60/40/40/30/0 (Olsen) -- the 20.1-30.0 column is "30", distinct
-        # from both its neighbors, so it needs its own band (was dropped
-        # entirely in the original transcription). K reads 60/60/60/20/0,
-        # not .../0/0 -- the 251-300 column is "20".
-        om_bands=((2.0, 60), (3.5, 50), (4.5, 45), (5.5, 40), (float("inf"), 0)),
-        p_bands=((6.0, 60), (10.0, 60), (15.0, 40), (20.0, 40), (30.0, 30), (float("inf"), 0)),
-        k_bands=((35.0, 60), (55.0, 60), (250.0, 60), (300.0, 20), (float("inf"), 0)),
-    ),
-    "Corn|Hybrid": GuideRow(
-        "kg_ha",
-        # Same P/K re-verification as Corn|Native (Hybrid row: P
-        # 60/60/40/40/30/0, K 60/60/60/20/0).
-        om_bands=((2.0, 120), (3.5, 90), (4.5, 60), (5.5, 50), (float("inf"), 0)),
-        p_bands=((6.0, 60), (10.0, 60), (15.0, 40), (20.0, 40), (30.0, 30), (float("inf"), 0)),
-        k_bands=((35.0, 60), (55.0, 60), (250.0, 60), (300.0, 20), (float("inf"), 0)),
-    ),
-    "Cassava": GuideRow(
-        "kg_ha",
-        om_bands=((2.0, 60), (3.5, 50), (4.5, 40), (5.5, 30), (float("inf"), 0)),
-        p_bands=((6.0, 60), (10.0, 40), (15.0, 30), (20.0, 20), (float("inf"), 0)),
-        k_bands=((35.0, 90), (55.0, 60), (250.0, 45), (300.0, 30), (float("inf"), 0)),
-    ),
-    "Peanut": GuideRow(
-        "kg_ha",
-        om_bands=((2.0, 10), (3.5, 0), (4.5, 0), (5.5, 0), (float("inf"), 0)),
-        p_bands=((6.0, 40), (10.0, 30), (15.0, 20), (20.0, 10), (float("inf"), 0)),
-        k_bands=((35.0, 45), (55.0, 30), (250.0, 15), (300.0, 0), (float("inf"), 0)),
-    ),
-    "Tomato": GuideRow(
-        "kg_ha",
-        om_bands=((2.0, 90), (3.5, 80), (4.5, 70), (5.5, 60), (float("inf"), 0)),
-        p_bands=((6.0, 120), (10.0, 90), (15.0, 60), (20.0, 30), (float("inf"), 0)),
-        k_bands=((35.0, 150), (55.0, 120), (250.0, 90), (300.0, 60), (float("inf"), 0)),
-    ),
-    "Mango|NT": GuideRow(
-        "kg_tree",
-        om_bands=((2.0, 0.01), (3.5, 0.01), (4.5, 0.01), (5.5, 0), (float("inf"), 0)),
-        p_bands=((6.0, 0.01), (10.0, 0.01), (15.0, 0.008), (20.0, 0.005), (float("inf"), 0)),
-        k_bands=((35.0, 0.15), (55.0, 0.009), (250.0, 0.003), (300.0, 0), (float("inf"), 0)),
-    ),
-    "Mango|1-3yrs": GuideRow(
-        "kg_tree",
-        om_bands=((2.0, 0.10), (3.5, 0.05), (4.5, 0.02), (5.5, 0), (float("inf"), 0)),
-        p_bands=((6.0, 0.10), (10.0, 0.05), (15.0, 0.03), (20.0, 0.02), (float("inf"), 0)),
-        k_bands=((35.0, 0.15), (55.0, 0.09), (250.0, 0.06), (300.0, 0), (float("inf"), 0)),
-    ),
-    "Mango|4-6yrs": GuideRow(
-        "kg_tree",
-        om_bands=((2.0, 0.15), (3.5, 0.10), (4.5, 0.05), (5.5, 0), (float("inf"), 0)),
-        p_bands=((6.0, 0.20), (10.0, 0.10), (15.0, 0.05), (20.0, 0.03), (float("inf"), 0)),
-        k_bands=((35.0, 0.30), (55.0, 0.15), (250.0, 0.09), (300.0, 0), (float("inf"), 0)),
-    ),
-    "Mango|7-10yrs & up": GuideRow(
-        "kg_tree",
-        om_bands=((2.0, 0.30), (3.5, 0.15), (4.5, 0.10), (5.5, 0), (float("inf"), 0)),
-        p_bands=((6.0, 0.30), (10.0, 0.20), (15.0, 0.10), (20.0, 0.05), (float("inf"), 0)),
-        k_bands=((35.0, 0.45), (55.0, 0.30), (250.0, 0.15), (300.0, 0), (float("inf"), 0)),
-    ),
-    "Mango|10yrs & up": GuideRow(
-        "kg_tree",
-        om_bands=((2.0, 0.40), (3.5, 0.30), (4.5, 0.15), (5.5, 0), (float("inf"), 0)),
-        p_bands=((6.0, 0.40), (10.0, 0.30), (15.0, 0.20), (20.0, 0.10), (float("inf"), 0)),
-        k_bands=((35.0, 0.60), (55.0, 0.45), (250.0, 0.30), (300.0, 0), (float("inf"), 0)),
-    ),
-    "Cacao|NT": GuideRow(
-        "kg_tree",
-        om_bands=((2.0, 0.003), (3.5, 0.002), (4.5, 0), (5.5, 0), (float("inf"), 0)),
-        p_bands=((6.0, 0.004), (10.0, 0.003), (15.0, 0.002), (20.0, 0.001), (float("inf"), 0)),
-        k_bands=((35.0, 0.003), (55.0, 0.002), (250.0, 0.001), (300.0, 0), (float("inf"), 0)),
-    ),
-    "Cacao|1yr": GuideRow(
-        "kg_tree",
-        om_bands=((2.0, 0.055), (3.5, 0.035), (4.5, 0.02), (5.5, 0.005), (float("inf"), 0)),
-        p_bands=((6.0, 0.11), (10.0, 0.07), (15.0, 0.04), (20.0, 0.015), (float("inf"), 0)),
-        k_bands=((35.0, 0.075), (55.0, 0.05), (250.0, 0.024), (300.0, 0), (float("inf"), 0)),
-    ),
-    "Cacao|2yrs": GuideRow(
-        "kg_tree",
-        om_bands=((2.0, 0.065), (3.5, 0.04), (4.5, 0.025), (5.5, 0.01), (float("inf"), 0)),
-        p_bands=((6.0, 0.13), (10.0, 0.08), (15.0, 0.05), (20.0, 0.025), (float("inf"), 0)),
-        k_bands=((35.0, 0.08), (55.0, 0.06), (250.0, 0.03), (300.0, 0), (float("inf"), 0)),
-    ),
-    "Cacao|3yrs": GuideRow(
-        "kg_tree",
-        om_bands=((2.0, 0.075), (3.5, 0.045), (4.5, 0.03), (5.5, 0.015), (float("inf"), 0)),
-        p_bands=((6.0, 0.15), (10.0, 0.09), (15.0, 0.055), (20.0, 0.025), (float("inf"), 0)),
-        k_bands=((35.0, 0.10), (55.0, 0.075), (250.0, 0.036), (300.0, 0), (float("inf"), 0)),
-    ),
-    "Cacao|Over 7yrs": GuideRow(
-        "kg_tree",
-        om_bands=((2.0, 0.10), (3.5, 0.06), (4.5, 0.035), (5.5, 0.02), (float("inf"), 0)),
-        p_bands=((6.0, 0.12), (10.0, 0.07), (15.0, 0.045), (20.0, 0.02), (float("inf"), 0)),
-        k_bands=((35.0, 0.12), (55.0, 0.09), (250.0, 0.045), (300.0, 0), (float("inf"), 0)),
-    ),
-    "Coconut|Below 1yr": GuideRow(
-        "kg_tree",
-        om_bands=((2.0, 0.06), (3.5, 0.06), (4.5, 0.04), (5.5, 0), (float("inf"), 0)),
-        p_bands=((6.0, 0.05), (10.0, 0.03), (15.0, 0.02), (20.0, 0.01), (float("inf"), 0)),
-        k_bands=((35.0, 0.20), (55.0, 0.15), (250.0, 0.10), (300.0, 0), (float("inf"), 0)),
-    ),
-    "Coconut|1-5yrs": GuideRow(
-        "kg_tree",
-        om_bands=((2.0, 0.30), (3.5, 0.20), (4.5, 0.10), (5.5, 0), (float("inf"), 0)),
-        p_bands=((6.0, 0.20), (10.0, 0.10), (15.0, 0.05), (20.0, 0.02), (float("inf"), 0)),
-        k_bands=((35.0, 0.60), (55.0, 0.45), (250.0, 0.30), (300.0, 0.10), (float("inf"), 0)),
-    ),
-    "Coconut|6-8yrs": GuideRow(
-        "kg_tree",
-        om_bands=((2.0, 0.40), (3.5, 0.30), (4.5, 0.20), (5.5, 0), (float("inf"), 0)),
-        p_bands=((6.0, 0.30), (10.0, 0.20), (15.0, 0.10), (20.0, 0.05), (float("inf"), 0)),
-        k_bands=((35.0, 1.20), (55.0, 0.90), (250.0, 0.60), (300.0, 0.30), (float("inf"), 0)),
-    ),
-    "Coconut|9yrs & up": GuideRow(
-        "kg_tree",
-        om_bands=((2.0, 0.50), (3.5, 0.40), (4.5, 0.30), (5.5, 0), (float("inf"), 0)),
-        p_bands=((6.0, 0.40), (10.0, 0.30), (15.0, 0.20), (20.0, 0.10), (float("inf"), 0)),
-        k_bands=((35.0, 1.80), (55.0, 1.50), (250.0, 1.20), (300.0, 0.60), (float("inf"), 0)),
-    ),
-    "Banana|Fruit": GuideRow(
-        "kg_tree",
-        om_bands=((2.0, 0.16), (3.5, 0.12), (4.5, 0.09), (5.5, 0.04), (float("inf"), 0)),
-        p_bands=((6.0, 0.05), (10.0, 0.045), (15.0, 0.04), (20.0, 0.035), (float("inf"), 0)),
-        k_bands=((35.0, 0.33), (55.0, 0.23), (250.0, 0.13), (300.0, 0.08), (float("inf"), 0)),
-    ),
-    # --- VEGETABLES (guide page 1) -------------------------------------
-    "Alugbati": GuideRow(
-        "kg_ha",
-        om_bands=((2.0, 90), (3.5, 60), (4.5, 45), (5.5, 30), (float("inf"), 0)),
-        p_bands=((6.0, 60), (10.0, 40), (15.0, 30), (20.0, 20), (float("inf"), 0)),
-        k_bands=((35.0, 60), (55.0, 45), (250.0, 30), (300.0, 0), (float("inf"), 0)),
-    ),
-    "Ampalaya": GuideRow(
-        "kg_ha",
-        om_bands=((2.0, 40), (3.5, 30), (4.5, 15), (5.5, 0), (float("inf"), 0)),
-        p_bands=((6.0, 80), (10.0, 60), (15.0, 40), (20.0, 20), (float("inf"), 0)),
-        k_bands=((35.0, 45), (55.0, 30), (250.0, 15), (300.0, 0), (float("inf"), 0)),
-    ),
-    "Asparagus": GuideRow(
-        "kg_ha",
-        om_bands=((2.0, 90), (3.5, 60), (4.5, 45), (5.5, 30), (float("inf"), 0)),
-        p_bands=((6.0, 40), (10.0, 30), (15.0, 20), (20.0, 10), (float("inf"), 0)),
-        k_bands=((35.0, 60), (55.0, 45), (250.0, 30), (300.0, 0), (float("inf"), 0)),
-    ),
-    "Cabbage": GuideRow(
-        "kg_ha",
-        om_bands=((2.0, 150), (3.5, 140), (4.5, 120), (5.5, 100), (float("inf"), 0)),
-        p_bands=((6.0, 80), (10.0, 60), (15.0, 40), (20.0, 20), (float("inf"), 0)),
-        k_bands=((35.0, 75), (55.0, 60), (250.0, 30), (300.0, 0), (float("inf"), 0)),
-    ),
-    "Cauliflower": GuideRow(
-        "kg_ha",
-        om_bands=((2.0, 90), (3.5, 60), (4.5, 30), (5.5, 0), (float("inf"), 0)),
-        p_bands=((6.0, 80), (10.0, 60), (15.0, 40), (20.0, 20), (float("inf"), 0)),
-        k_bands=((35.0, 90), (55.0, 60), (250.0, 30), (300.0, 0), (float("inf"), 0)),
-    ),
-    "Celery": GuideRow(
-        "kg_ha",
-        om_bands=((2.0, 60), (3.5, 50), (4.5, 40), (5.5, 30), (float("inf"), 0)),
-        p_bands=((6.0, 90), (10.0, 60), (15.0, 40), (20.0, 20), (float("inf"), 0)),
-        # Terminal K band is INFERRED as 0: the guide leaves Celery's >301
-        # cell blank, unlike every other vegetable row, which prints 0 there.
-        k_bands=((35.0, 60), (55.0, 45), (250.0, 30), (300.0, 0), (float("inf"), 0)),
-    ),
-    "Chayote": GuideRow(
-        "kg_ha",
-        om_bands=((2.0, 60), (3.5, 50), (4.5, 40), (5.5, 30), (float("inf"), 0)),
-        p_bands=((6.0, 80), (10.0, 60), (15.0, 40), (20.0, 20), (float("inf"), 0)),
-        k_bands=((35.0, 65), (55.0, 45), (250.0, 30), (300.0, 0), (float("inf"), 0)),
-    ),
-    "Cucumber": GuideRow(
-        "kg_ha",
-        om_bands=((2.0, 60), (3.5, 40), (4.5, 20), (5.5, 0), (float("inf"), 0)),
-        p_bands=((6.0, 100), (10.0, 75), (15.0, 50), (20.0, 25), (float("inf"), 0)),
-        k_bands=((35.0, 45), (55.0, 30), (250.0, 15), (300.0, 0), (float("inf"), 0)),
-    ),
-    "Eggplant": GuideRow(
-        "kg_ha",
-        om_bands=((2.0, 90), (3.5, 80), (4.5, 70), (5.5, 60), (float("inf"), 0)),
-        p_bands=((6.0, 80), (10.0, 60), (15.0, 30), (20.0, 10), (float("inf"), 0)),
-        k_bands=((35.0, 90), (55.0, 60), (250.0, 30), (300.0, 0), (float("inf"), 0)),
-    ),
-    "Lettuce": GuideRow(
-        "kg_ha",
-        om_bands=((2.0, 60), (3.5, 50), (4.5, 40), (5.5, 30), (float("inf"), 0)),
-        p_bands=((6.0, 60), (10.0, 40), (15.0, 30), (20.0, 20), (float("inf"), 0)),
-        k_bands=((35.0, 75), (55.0, 60), (250.0, 30), (300.0, 0), (float("inf"), 0)),
-    ),
-    "Radish": GuideRow(
-        "kg_ha",
-        om_bands=((2.0, 90), (3.5, 60), (4.5, 30), (5.5, 0), (float("inf"), 0)),
-        p_bands=((6.0, 90), (10.0, 60), (15.0, 40), (20.0, 20), (float("inf"), 0)),
-        k_bands=((35.0, 120), (55.0, 90), (250.0, 60), (300.0, 30), (float("inf"), 0)),
-    ),
-    "Squash": GuideRow(
-        "kg_ha",
-        om_bands=((2.0, 60), (3.5, 40), (4.5, 30), (5.5, 30), (float("inf"), 0)),
-        p_bands=((6.0, 80), (10.0, 60), (15.0, 40), (20.0, 20), (float("inf"), 0)),
-        k_bands=((35.0, 60), (55.0, 45), (250.0, 30), (300.0, 0), (float("inf"), 0)),
-    ),
-    "Strawberry": GuideRow(
-        "kg_ha",
-        om_bands=((2.0, 45), (3.5, 30), (4.5, 20), (5.5, 0), (float("inf"), 0)),
-        p_bands=((6.0, 30), (10.0, 20), (15.0, 20), (20.0, 10), (float("inf"), 0)),
-        k_bands=((35.0, 60), (55.0, 48), (250.0, 30), (300.0, 0), (float("inf"), 0)),
-    ),
-    # --- CONDIMENTS / SPICES (guide page 2) -----------------------------
-    "Garlic": GuideRow(
-        "kg_ha",
-        om_bands=((2.0, 120), (3.5, 90), (4.5, 60), (5.5, 30), (float("inf"), 0)),
-        p_bands=((6.0, 80), (10.0, 60), (15.0, 40), (20.0, 20), (float("inf"), 0)),
-        k_bands=((35.0, 150), (55.0, 120), (250.0, 90), (300.0, 60), (float("inf"), 0)),
-    ),
-    "Ginger|Improved": GuideRow(
-        "kg_ha",
-        om_bands=((2.0, 60), (3.5, 40), (4.5, 20), (5.5, 0), (float("inf"), 0)),
-        p_bands=((6.0, 60), (10.0, 40), (15.0, 20), (20.0, 10), (float("inf"), 0)),
-        k_bands=((35.0, 120), (55.0, 90), (250.0, 60), (300.0, 30), (float("inf"), 0)),
-    ),
-    "Ginger|Local": GuideRow(
-        "kg_ha",
-        om_bands=((2.0, 40), (3.5, 30), (4.5, 20), (5.5, 0), (float("inf"), 0)),
-        p_bands=((6.0, 50), (10.0, 40), (15.0, 20), (20.0, 10), (float("inf"), 0)),
-        k_bands=((35.0, 90), (55.0, 60), (250.0, 45), (300.0, 30), (float("inf"), 0)),
-    ),
-    "Onion|Bulb": GuideRow(
-        "kg_ha",
-        om_bands=((2.0, 120), (3.5, 90), (4.5, 60), (5.5, 30), (float("inf"), 0)),
-        p_bands=((6.0, 80), (10.0, 60), (15.0, 40), (20.0, 20), (float("inf"), 0)),
-        k_bands=((35.0, 150), (55.0, 120), (250.0, 90), (300.0, 60), (float("inf"), 0)),
-    ),
-    "Onion|Spring": GuideRow(
-        "kg_ha",
-        om_bands=((2.0, 130), (3.5, 120), (4.5, 70), (5.5, 60), (float("inf"), 0)),
-        p_bands=((6.0, 60), (10.0, 45), (15.0, 35), (20.0, 20), (float("inf"), 0)),
-        k_bands=((35.0, 45), (55.0, 35), (250.0, 30), (300.0, 0), (float("inf"), 0)),
-    ),
-    # --- ROOTCROPS (guide page 2) ---------------------------------------
-    "Gabi": GuideRow(
-        "kg_ha",
-        om_bands=((2.0, 40), (3.5, 30), (4.5, 20), (5.5, 0), (float("inf"), 0)),
-        p_bands=((6.0, 60), (10.0, 40), (15.0, 20), (20.0, 10), (float("inf"), 0)),
-        k_bands=((35.0, 90), (55.0, 60), (250.0, 30), (300.0, 0), (float("inf"), 0)),
-    ),
-    "Potato": GuideRow(
-        "kg_ha",
-        om_bands=((2.0, 120), (3.5, 90), (4.5, 60), (5.5, 30), (float("inf"), 0)),
-        p_bands=((6.0, 100), (10.0, 80), (15.0, 60), (20.0, 30), (float("inf"), 0)),
-        k_bands=((35.0, 120), (55.0, 90), (250.0, 60), (300.0, 0), (float("inf"), 0)),
-    ),
-    # --- LEGUMES (guide page 2) -----------------------------------------
-    "Beans": GuideRow(
-        "kg_ha",
-        om_bands=((2.0, 10), (3.5, 0), (4.5, 0), (5.5, 0), (float("inf"), 0)),
-        p_bands=((6.0, 60), (10.0, 40), (15.0, 30), (20.0, 20), (float("inf"), 0)),
-        k_bands=((35.0, 60), (55.0, 45), (250.0, 30), (300.0, 0), (float("inf"), 0)),
-    ),
-    "Peas": GuideRow(
-        "kg_ha",
-        om_bands=((2.0, 20), (3.5, 10), (4.5, 0), (5.5, 0), (float("inf"), 0)),
-        p_bands=((6.0, 40), (10.0, 30), (15.0, 20), (20.0, 10), (float("inf"), 0)),
-        k_bands=((35.0, 45), (55.0, 30), (250.0, 15), (300.0, 0), (float("inf"), 0)),
-    ),
-    # --- INDUSTRIAL (guide page 2) --------------------------------------
-    "Sugarcane": GuideRow(
-        "kg_ha",
-        om_bands=((2.0, 180), (3.5, 130), (4.5, 100), (5.5, 75), (float("inf"), 0)),
-        p_bands=((6.0, 120), (10.0, 80), (15.0, 40), (20.0, 20), (float("inf"), 0)),
-        k_bands=((35.0, 160), (55.0, 130), (250.0, 100), (300.0, 60), (float("inf"), 0)),
-    ),
-    # --- PLANTATION / FRUIT TREES (guide pages 2-3) ---------------------
-    # Pineapple's Planted/Ratoon is a crop-cycle axis, carried on the
-    # variety field (same mechanism as Ginger's Improved/Local).
-    "Pineapple|Planted": GuideRow(
-        "kg_ha",
-        om_bands=((2.0, 300), (3.5, 200), (4.5, 100), (5.5, 80), (float("inf"), 0)),
-        p_bands=((6.0, 80), (10.0, 60), (15.0, 40), (20.0, 20), (float("inf"), 0)),
-        k_bands=((35.0, 180), (55.0, 120), (250.0, 60), (300.0, 30), (float("inf"), 0)),
-    ),
-    "Pineapple|Ratoon": GuideRow(
-        "kg_ha",
-        om_bands=((2.0, 150), (3.5, 120), (4.5, 80), (5.5, 50), (float("inf"), 0)),
-        p_bands=((6.0, 40), (10.0, 30), (15.0, 20), (20.0, 10), (float("inf"), 0)),
-        k_bands=((35.0, 120), (55.0, 75), (250.0, 45), (300.0, 30), (float("inf"), 0)),
-    ),
-    "Avocado|NT": GuideRow(
-        "kg_tree",
-        om_bands=((2.0, 0.01), (3.5, 0.01), (4.5, 0.01), (5.5, 0), (float("inf"), 0)),
-        p_bands=((6.0, 0.01), (10.0, 0.01), (15.0, 0.01), (20.0, 0.01), (float("inf"), 0)),
-        k_bands=((35.0, 0.015), (55.0, 0.015), (250.0, 0.015), (300.0, 0), (float("inf"), 0)),
-    ),
-    "Avocado|1-3 yrs": GuideRow(
-        "kg_tree",
-        om_bands=((2.0, 0.10), (3.5, 0.05), (4.5, 0.03), (5.5, 0), (float("inf"), 0)),
-        p_bands=((6.0, 0.10), (10.0, 0.05), (15.0, 0.03), (20.0, 0.01), (float("inf"), 0)),
-        k_bands=((35.0, 0.30), (55.0, 0.15), (250.0, 0.05), (300.0, 0), (float("inf"), 0)),
-    ),
-    "Avocado|4-6 yrs": GuideRow(
-        "kg_tree",
-        om_bands=((2.0, 0.20), (3.5, 0.10), (4.5, 0.06), (5.5, 0), (float("inf"), 0)),
-        p_bands=((6.0, 0.20), (10.0, 0.10), (15.0, 0.08), (20.0, 0.05), (float("inf"), 0)),
-        k_bands=((35.0, 0.45), (55.0, 0.30), (250.0, 0.15), (300.0, 0), (float("inf"), 0)),
-    ),
-    "Avocado|7 yrs & up": GuideRow(
-        "kg_tree",
-        om_bands=((2.0, 0.30), (3.5, 0.20), (4.5, 0.10), (5.5, 0), (float("inf"), 0)),
-        p_bands=((6.0, 0.30), (10.0, 0.20), (15.0, 0.15), (20.0, 0.10), (float("inf"), 0)),
-        k_bands=((35.0, 0.60), (55.0, 0.45), (250.0, 0.30), (300.0, 0), (float("inf"), 0)),
-    ),
-    "Citrus|NT": GuideRow(
-        "kg_tree",
-        om_bands=((2.0, 0.01), (3.5, 0.01), (4.5, 0.005), (5.5, 0), (float("inf"), 0)),
-        p_bands=((6.0, 0.01), (10.0, 0.01), (15.0, 0.008), (20.0, 0.005), (float("inf"), 0)),
-        k_bands=((35.0, 0.015), (55.0, 0.009), (250.0, 0.003), (300.0, 0), (float("inf"), 0)),
-    ),
-    "Citrus|1 yr": GuideRow(
-        "kg_tree",
-        om_bands=((2.0, 0.04), (3.5, 0.02), (4.5, 0.008), (5.5, 0), (float("inf"), 0)),
-        p_bands=((6.0, 0.04), (10.0, 0.02), (15.0, 0.01), (20.0, 0.008), (float("inf"), 0)),
-        k_bands=((35.0, 0.03), (55.0, 0.015), (250.0, 0.015), (300.0, 0), (float("inf"), 0)),
-    ),
-    "Citrus|2 yrs": GuideRow(
-        "kg_tree",
-        om_bands=((2.0, 0.05), (3.5, 0.03), (4.5, 0.01), (5.5, 0), (float("inf"), 0)),
-        p_bands=((6.0, 0.05), (10.0, 0.03), (15.0, 0.015), (20.0, 0.010), (float("inf"), 0)),
-        k_bands=((35.0, 0.06), (55.0, 0.03), (250.0, 0.009), (300.0, 0), (float("inf"), 0)),
-    ),
-    "Citrus|3 yrs": GuideRow(
-        "kg_tree",
-        om_bands=((2.0, 0.075), (3.5, 0.04), (4.5, 0.015), (5.5, 0), (float("inf"), 0)),
-        p_bands=((6.0, 0.075), (10.0, 0.04), (15.0, 0.02), (20.0, 0.015), (float("inf"), 0)),
-        k_bands=((35.0, 0.09), (55.0, 0.06), (250.0, 0.015), (300.0, 0), (float("inf"), 0)),
-    ),
-    "Citrus|4 yrs": GuideRow(
-        "kg_tree",
-        om_bands=((2.0, 0.10), (3.5, 0.06), (4.5, 0.02), (5.5, 0), (float("inf"), 0)),
-        p_bands=((6.0, 0.10), (10.0, 0.05), (15.0, 0.03), (20.0, 0.02), (float("inf"), 0)),
-        k_bands=((35.0, 0.15), (55.0, 0.09), (250.0, 0.03), (300.0, 0), (float("inf"), 0)),
-    ),
-    "Citrus|5 yrs": GuideRow(
-        "kg_tree",
-        om_bands=((2.0, 0.15), (3.5, 0.10), (4.5, 0.03), (5.5, 0), (float("inf"), 0)),
-        p_bands=((6.0, 0.20), (10.0, 0.10), (15.0, 0.05), (20.0, 0.03), (float("inf"), 0)),
-        # Decimal points RESTORED: the source prints '.03' and '15' for the
-        # first two K classes. Both are missing a decimal -- .30/.15/.06 keeps
-        # the row monotonic and continues the 4yrs (.15/.09/.03) to 6-10yrs
-        # (.45/.30/.09) progression.
-        k_bands=((35.0, 0.30), (55.0, 0.15), (250.0, 0.06), (300.0, 0), (float("inf"), 0)),
-    ),
-    "Citrus|6-10 yrs": GuideRow(
-        "kg_tree",
-        om_bands=((2.0, 0.30), (3.5, 0.20), (4.5, 0.05), (5.5, 0), (float("inf"), 0)),
-        p_bands=((6.0, 0.30), (10.0, 0.20), (15.0, 0.10), (20.0, 0.05), (float("inf"), 0)),
-        # Decimal point RESTORED: source prints '45' for K 0-35.
-        k_bands=((35.0, 0.45), (55.0, 0.30), (250.0, 0.09), (300.0, 0), (float("inf"), 0)),
-    ),
-    "Citrus|11-15 yrs": GuideRow(
-        "kg_tree",
-        om_bands=((2.0, 0.40), (3.5, 0.30), (4.5, 0.10), (5.5, 0), (float("inf"), 0)),
-        # Decimal point RESTORED: source prints '40' for P 0-6.0.
-        p_bands=((6.0, 0.40), (10.0, 0.30), (15.0, 0.20), (20.0, 0.10), (float("inf"), 0)),
-        k_bands=((35.0, 0.60), (55.0, 0.45), (250.0, 0.15), (300.0, 0), (float("inf"), 0)),
-    ),
-    "Citrus|15 yrs & up": GuideRow(
-        "kg_tree",
-        om_bands=((2.0, 0.50), (3.5, 0.40), (4.5, 0.20), (5.5, 0), (float("inf"), 0)),
-        p_bands=((6.0, 0.50), (10.0, 0.40), (15.0, 0.30), (20.0, 0.20), (float("inf"), 0)),
-        k_bands=((35.0, 0.75), (55.0, 0.60), (250.0, 0.30), (300.0, 0), (float("inf"), 0)),
-    ),
-    "Guava|1-3 yrs": GuideRow(
-        "kg_tree",
-        om_bands=((2.0, 0.02), (3.5, 0.01), (4.5, 0.005), (5.5, 0), (float("inf"), 0)),
-        p_bands=((6.0, 0.10), (10.0, 0.05), (15.0, 0.03), (20.0, 0.01), (float("inf"), 0)),
-        k_bands=((35.0, 0.30), (55.0, 0.15), (250.0, 0.05), (300.0, 0), (float("inf"), 0)),
-    ),
-    "Guava|4-6 yrs": GuideRow(
-        "kg_tree",
-        om_bands=((2.0, 0.04), (3.5, 0.02), (4.5, 0.01), (5.5, 0), (float("inf"), 0)),
-        p_bands=((6.0, 0.20), (10.0, 0.10), (15.0, 0.08), (20.0, 0.05), (float("inf"), 0)),
-        k_bands=((35.0, 0.45), (55.0, 0.30), (250.0, 0.15), (300.0, 0), (float("inf"), 0)),
-    ),
-    # Label INFERRED: the guide prints '4-6 yrs' twice. These values ascend
-    # from the row above and match the Avocado group's '7 yrs & up' row
-    # exactly, so this is that band.
-    "Guava|7 yrs & up": GuideRow(
-        "kg_tree",
-        om_bands=((2.0, 0.05), (3.5, 0.03), (4.5, 0.02), (5.5, 0), (float("inf"), 0)),
-        p_bands=((6.0, 0.30), (10.0, 0.20), (15.0, 0.15), (20.0, 0.10), (float("inf"), 0)),
-        k_bands=((35.0, 0.60), (55.0, 0.45), (250.0, 0.30), (300.0, 0), (float("inf"), 0)),
-    ),
-    "Lanzones|NT": GuideRow(
-        "kg_tree",
-        om_bands=((2.0, 0.01), (3.5, 0.01), (4.5, 0.01), (5.5, 0), (float("inf"), 0)),
-        p_bands=((6.0, 0.02), (10.0, 0.02), (15.0, 0.02), (20.0, 0.01), (float("inf"), 0)),
-        k_bands=((35.0, 0.08), (55.0, 0.05), (250.0, 0.03), (300.0, 0), (float("inf"), 0)),
-    ),
-    "Lanzones|1-3 yrs": GuideRow(
-        "kg_tree",
-        om_bands=((2.0, 0.10), (3.5, 0.05), (4.5, 0.03), (5.5, 0), (float("inf"), 0)),
-        p_bands=((6.0, 0.20), (10.0, 0.10), (15.0, 0.05), (20.0, 0.03), (float("inf"), 0)),
-        k_bands=((35.0, 0.30), (55.0, 0.15), (250.0, 0.09), (300.0, 0), (float("inf"), 0)),
-    ),
-    "Lanzones|4-6 yrs": GuideRow(
-        "kg_tree",
-        om_bands=((2.0, 0.20), (3.5, 0.10), (4.5, 0.05), (5.5, 0), (float("inf"), 0)),
-        p_bands=((6.0, 0.40), (10.0, 0.30), (15.0, 0.20), (20.0, 0.10), (float("inf"), 0)),
-        k_bands=((35.0, 0.90), (55.0, 0.60), (250.0, 0.30), (300.0, 0), (float("inf"), 0)),
-    ),
-    "Lanzones|7 yrs & up": GuideRow(
-        "kg_tree",
-        om_bands=((2.0, 0.40), (3.5, 0.30), (4.5, 0.20), (5.5, 0), (float("inf"), 0)),
-        p_bands=((6.0, 0.80), (10.0, 0.60), (15.0, 0.40), (20.0, 0.20), (float("inf"), 0)),
-        k_bands=((35.0, 1.2), (55.0, 0.90), (250.0, 0.60), (300.0, 0), (float("inf"), 0)),
-    ),
-}
+# Module-level state, reassigned wholesale by reload_guide() -- never
+# mutated in place. Populated once below at import time, and again by
+# main.py's POST /admin/reload-guide. Every consumer (this file's own
+# resolve_*/nutrient_requirements functions, ml/preprocessing.py's
+# build_categories(), main.py's and data/training_upload.py's crop
+# validators) reads these as plain module attributes, so a reassignment
+# here is visible everywhere immediately -- see the module-qualified-import
+# fix in main.py/data/training_upload.py/ml/preprocessing.py, which is what
+# makes that true.
+GUIDE_ROWS: dict[str, GuideRow] = {}
+CROP_ALIASES: dict[str, str] = {}
+VARIETIES_BY_CROP: dict[str, tuple[str, ...]] = {}
+CULTIVATION_METHODS_BY_CROP: dict[str, tuple[str, ...]] = {}
+DEFAULT_VARIETY_ROW: dict[str, str] = {}
+DEFAULT_CULTIVATION_METHOD_ROW: dict[str, str] = {}
+BEARING_AGE_BAND: dict[str, str] = {}
+TARGET_UNIT: dict[str, str] = {}
+CANONICAL_CROPS: list[str] = []
+CROPS: list[str] = []
 
 
-def _derive_target_units(rows: dict[str, GuideRow]) -> dict[str, str]:
-    """Every row of one crop must agree on its unit -- a crop measured in
-    kg/ha by one row and kg/tree by another would make target_unit_for_crop()
-    depend on dict ordering."""
-    units: dict[str, str] = {}
-    for key, row in rows.items():
-        crop = key.split("|", 1)[0]
-        existing = units.setdefault(crop, row.unit)
-        if existing != row.unit:
-            raise ValueError(
-                f"Crop {crop!r} has rows with conflicting units: {existing} and {row.unit}"
-            )
-    return units
+def reload_guide(client=None) -> None:
+    """Re-reads crops/crop_variants/crop_nutrient_targets from Supabase and
+    reassigns every module-level global above in place. The single function
+    both main.py's real startup (its FastAPI `lifespan`, alongside the
+    existing _reconcile_boot_registry() step) and its POST /admin/reload-guide
+    call -- one code path, two triggers, per the design spec's Decision 4.
 
+    Deliberately NOT called at this module's own import time: that would
+    make importing this module (which nearly every test does transitively)
+    require a live, reachable Supabase project with the crops/crop_variants/
+    crop_nutrient_targets tables already populated -- this repo's test
+    suite is explicitly designed to run against dummy Supabase credentials
+    with no network access (see tests/conftest.py's docstring). Production
+    startup calls this explicitly; tests populate guide state via
+    tests/conftest.py's pytest_configure, injecting a fake `client` built
+    from the committed tests/fixtures/crop_reference_seed.csv instead of a
+    real network call.
 
-# Derived from GUIDE_ROWS, never restated by hand: adding a crop means adding
-# its guide row(s) and nothing else. Sorted so the one-hot encoder's category
-# order is deterministic across processes.
-CANONICAL_CROPS: list[str] = sorted({key.split("|", 1)[0] for key in GUIDE_ROWS})
+    `client` defaults to the real Supabase client (data.ingest_to_supabase.
+    get_client()) when not supplied -- production callers never pass one.
 
-TARGET_UNIT: dict[str, str] = _derive_target_units(GUIDE_ROWS)
+    get_client is imported here, not at module level: data.ingest_to_supabase
+    transitively imports ml.agronomy, which imports nutrient_requirements
+    FROM THIS MODULE -- a top-level import here would be circular (this
+    module wouldn't have finished defining nutrient_requirements yet). Since
+    reload_guide() is never called during this module's own import anymore,
+    deferring the import to call time breaks the cycle."""
+    from data.ingest_to_supabase import get_client
 
-# Species the guide prints on the SAME row as a canonical crop, sharing its
-# exact rates. Aliasing rather than duplicating keeps one row per set of
-# numbers, so the one-hot feature width tracks guide rows (not selectable
-# names) and a rate correction is still a single edit.
-CROP_ALIASES: dict[str, str] = {
-    # Species the guide prints on the same row as the canonical crop above.
-    "Kangkong": "Alugbati",
-    "Pechay": "Cabbage",
-    "Mustard": "Cabbage",
-    "Spinach": "Cabbage",
-    "Broccoli": "Cabbage",
-    "Muskmelon": "Cucumber",
-    "Watermelon": "Cucumber",
-    "Okra": "Eggplant",
-    "Malunggay": "Lettuce",
-    "Carrots": "Radish",
-    "Upo": "Squash",
-    "Patola": "Squash",
-    "Chili Pepper": "Garlic",
-    "Ube": "Gabi",
-    "Yam": "Gabi",
-    "Taro": "Gabi",
-    "Singkamas": "Potato",
-    "Lima": "Beans",
-    "Sitao": "Beans",
-    "Tapilan": "Peas",
-    "Cowpea": "Peas",
-    # Species printed on an existing crop's own guide row -- no new rates.
-    "Sorghum": "Corn",
-    "Camote": "Cassava",
-    "Yacon": "Cassava",
-    "Soybean": "Peanut",
-    "Mongo": "Peanut",
-    "Santol": "Mango",
-    "Caimito": "Mango",
-    "Durian": "Mango",
-    "Marang": "Mango",
-    # Fruit-tree groups: every species below shares its canonical crop's row.
-    "Chico": "Avocado",
-    "Atis": "Avocado",
-    "Guyabano": "Avocado",
-    "Apple": "Avocado",
-    "Cashew": "Avocado",
-    "Jackfruit": "Avocado",
-    "Macopa": "Avocado",
-    "Tambis": "Avocado",
-    "Balimbing": "Avocado",
-    "Lime": "Citrus",
-    "Lemon": "Citrus",
-    "Orange": "Citrus",
-    "Calamansi": "Citrus",
-    "Passion Fruit": "Citrus",
-    "Rambutan": "Lanzones",
-    "Mangosteen": "Lanzones",
-}
+    global GUIDE_ROWS, CROP_ALIASES, VARIETIES_BY_CROP, CULTIVATION_METHODS_BY_CROP
+    global DEFAULT_VARIETY_ROW, DEFAULT_CULTIVATION_METHOD_ROW, BEARING_AGE_BAND
+    global TARGET_UNIT, CANONICAL_CROPS, CROPS
+
+    source = build_guide_source(client if client is not None else get_client())
+
+    GUIDE_ROWS = source.guide_rows
+    CROP_ALIASES = source.crop_aliases
+    VARIETIES_BY_CROP = source.varieties_by_crop
+    CULTIVATION_METHODS_BY_CROP = source.cultivation_methods_by_crop
+    DEFAULT_VARIETY_ROW = source.default_variety_row
+    DEFAULT_CULTIVATION_METHOD_ROW = source.default_cultivation_method_row
+    BEARING_AGE_BAND = source.bearing_age_band
+    TARGET_UNIT = source.target_unit
+    CANONICAL_CROPS = sorted({key.split("|", 1)[0] for key in GUIDE_ROWS})
+    CROPS = CANONICAL_CROPS + sorted(CROP_ALIASES)
 
 
 def resolve_crop(crop: str) -> str:
@@ -695,20 +198,6 @@ def resolve_crop(crop: str) -> str:
     if crop in CANONICAL_CROPS:
         return crop
     raise KeyError(f"Unknown crop {crop!r}")
-
-
-CROPS: list[str] = CANONICAL_CROPS + sorted(CROP_ALIASES)
-
-# For crops the guide splits on a non-age, non-cultivation axis, the row label
-# used when the caller supplies nothing (or something this crop doesn't have).
-# Corn is the existing case: its rows are Native/Hybrid, and an unset or "OPV"
-# variety maps to Native.
-DEFAULT_VARIETY_ROW: dict[str, str] = {
-    "Corn": "Native",
-    "Ginger": "Improved",
-    "Onion": "Bulb",
-    "Pineapple": "Planted",
-}
 
 
 def max_total_need(
@@ -746,11 +235,13 @@ def resolve_variety(crop: str, variety: str | None) -> str:
 
 
 def resolve_cultivation_method(crop: str, cultivation_method: str | None) -> str:
-    if resolve_crop(crop) != "Rice":
+    canonical = resolve_crop(crop)
+    options = CULTIVATION_METHODS_BY_CROP.get(canonical)
+    if options is None:
         return "None"
-    if cultivation_method in RICE_CULTIVATION_METHODS:
+    if cultivation_method in options:
         return cultivation_method
-    return "Lowland Wet"
+    return DEFAULT_CULTIVATION_METHOD_ROW[canonical]
 
 
 def resolve_age_band(crop: str, age_band: str | None) -> str:
@@ -765,16 +256,14 @@ def resolve_age_band(crop: str, age_band: str | None) -> str:
 def _guide_row_key(
     crop: str, variety: str | None, cultivation_method: str | None, age_band: str | None,
 ) -> str:
-    if crop == "Rice":
-        return f"Rice|{resolve_cultivation_method(crop, cultivation_method)}"
+    if crop in CULTIVATION_METHODS_BY_CROP:
+        return f"{crop}|{resolve_cultivation_method(crop, cultivation_method)}"
     if crop in DEFAULT_VARIETY_ROW:
         resolved = resolve_variety(crop, variety)
         label = resolved if f"{crop}|{resolved}" in GUIDE_ROWS else DEFAULT_VARIETY_ROW[crop]
         return f"{crop}|{label}"
     if crop in BEARING_AGE_BAND:
         return f"{crop}|{resolve_age_band(crop, age_band)}"
-    if crop == "Banana":
-        return "Banana|Fruit"
     return crop
 
 

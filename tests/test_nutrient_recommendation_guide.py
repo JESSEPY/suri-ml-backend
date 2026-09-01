@@ -76,6 +76,22 @@ class TestResolvers:
         assert resolve_variety("Corn", "Inbred") == "None"
 
 
+class TestGeneralizedResolution:
+    def test_rice_cultivation_method_still_resolves_via_dict_not_name_check(self):
+        assert resolve_cultivation_method("Rice", "Upland") == "Upland"
+        assert resolve_cultivation_method("Rice", None) == "Lowland Wet"
+        assert resolve_cultivation_method("Rice", "not-a-real-method") == "Lowland Wet"
+
+    def test_non_rice_crop_has_no_cultivation_method_axis(self):
+        assert resolve_cultivation_method("Corn", "Upland") == "None"
+
+    def test_banana_still_resolves_to_fruit_row_via_default_variety_row(self):
+        n, p, k = nutrient_requirements("Banana", om=3.0, p_ppm=8.0, k_cmol_kg=0.2)
+        assert (n, p, k) == nutrient_requirements(
+            "Banana", om=3.0, p_ppm=8.0, k_cmol_kg=0.2, variety="anything-unrecognized"
+        )
+
+
 class TestNutrientRequirements:
     def test_returns_a_numeric_triple(self):
         n, p, k = nutrient_requirements("Corn", om=2.5, p_ppm=15.0, k_cmol_kg=0.3)
@@ -240,27 +256,37 @@ class TestDerivedRegistry:
 
         assert set(TARGET_UNIT) == set(CANONICAL_CROPS)
 
-    def test_a_crop_whose_rows_disagree_on_unit_is_rejected(self):
-        """A mixed-unit crop would make target_unit_for_crop() arbitrary."""
-        from data.nutrient_recommendation_guide import GuideRow, _derive_target_units
-
-        rows = {
-            "Bogus|A": GuideRow("kg_ha", ((2.0, 1),), ((6.0, 1),), ((35.0, 1),)),
-            "Bogus|B": GuideRow("kg_tree", ((2.0, 1),), ((6.0, 1),), ((35.0, 1),)),
-        }
-        with pytest.raises(ValueError, match="Bogus"):
-            _derive_target_units(rows)
+    # test_a_crop_whose_rows_disagree_on_unit_is_rejected was removed here.
+    # It pinned _derive_target_units(), which scanned GUIDE_ROWS to catch a
+    # crop whose rows disagreed on unit -- a real risk when TARGET_UNIT was
+    # derived from per-row data. Since the crop-nutrient-reference-cms work
+    # (docs/superpowers/plans/2026-09-01-crop-nutrient-reference-cms.md
+    # Task 4), TARGET_UNIT comes directly from the crops table's `unit`
+    # column -- one value per crop, not per-row -- so the scenario this test
+    # covered (two rows of the same crop disagreeing) is no longer
+    # representable at all, and _derive_target_units was deleted along with
+    # the hardcoded GUIDE_ROWS literal it used to validate.
 
 
 class TestGuideRowKeyGeneralization:
     """Corn's Native/Hybrid split is a variety axis, same shape as the
     sub-axes new crops need. Pinning it here guards the generalization."""
 
-    def test_corn_defaults_to_the_native_row(self):
+    def test_corn_defaults_to_the_opv_row(self):
+        # Pre-migration, the hardcoded GUIDE_ROWS literal named this row
+        # "Native" internally while VARIETIES_BY_CROP offered "OPV" as the
+        # actual selectable option a user picked -- an unmatched "OPV" fell
+        # back to the "Native"-named row via DEFAULT_VARIETY_ROW. Now that
+        # crop_nutrient_targets.variant_key IS the row key (guide_source.py
+        # builds GUIDE_ROWS from it directly), that naming mismatch has no
+        # representation left to seed: the row is seeded, and therefore
+        # named, after the real selectable default, "OPV". No fallback
+        # needed for the case this test used to exercise; "OPV" now hits
+        # directly, same as any other crop's default option.
         from data.nutrient_recommendation_guide import _guide_row_key
 
-        assert _guide_row_key("Corn", None, None, None) == "Corn|Native"
-        assert _guide_row_key("Corn", "OPV", None, None) == "Corn|Native"
+        assert _guide_row_key("Corn", None, None, None) == "Corn|OPV"
+        assert _guide_row_key("Corn", "OPV", None, None) == "Corn|OPV"
         assert _guide_row_key("Corn", "Hybrid", None, None) == "Corn|Hybrid"
 
     def test_rice_still_keys_on_cultivation_method(self):

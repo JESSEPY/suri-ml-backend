@@ -25,8 +25,9 @@ from starlette.concurrency import run_in_threadpool
 
 from data.ingest_to_supabase import TABLE as TRAINING_TABLE, ingest_records
 from data.mode_of_application import application_schedule_for_crop
+from data import nutrient_recommendation_guide as guide
 from data.nutrient_recommendation_guide import (
-    CROPS, k_cmol_to_ppm, max_total_need, nutrient_requirements, resolve_age_band,
+    k_cmol_to_ppm, max_total_need, nutrient_requirements, resolve_age_band,
     resolve_crop, resolve_cultivation_method, resolve_variety, target_unit_for_crop,
 )
 from data.training_upload import (
@@ -57,7 +58,25 @@ async def lifespan(_app: FastAPI):
     # in the shared registry. Importing main.py (tests, a REPL, a one-off
     # script) must never rewrite which model production considers live.
     _reconcile_boot_registry()
+    _reload_guide_at_startup()
     yield
+
+
+def _reload_guide_at_startup() -> None:
+    """Loads crops/crop_variants/crop_nutrient_targets from Supabase into
+    guide.GUIDE_ROWS/CROPS/etc. at real process startup -- this module no
+    longer loads that data at import time (see
+    data.nutrient_recommendation_guide.reload_guide's docstring for why).
+    Never allowed to block startup: same posture as
+    _reconcile_boot_registry -- a Supabase outage (or, for a `with
+    TestClient(...)` context in tests, dummy/unreachable credentials)
+    degrades to whatever guide state is already loaded (e.g. a test
+    fixture's tests/conftest.py bootstrap) rather than crashing the
+    process."""
+    try:
+        guide.reload_guide()
+    except Exception as error:
+        logger.warning("Could not load crop reference data at startup: %s", error)
 
 
 app = FastAPI(title="SURI Fertilizer ML Service", version="1.0.0", lifespan=lifespan)
@@ -103,8 +122,8 @@ class SoilTestRequest(BaseModel):
     @field_validator("crop")
     @classmethod
     def crop_must_be_known(cls, value: str) -> str:
-        if value not in CROPS:
-            raise ValueError(f"Unknown crop '{value}'. Valid crops: {', '.join(CROPS)}")
+        if value not in guide.CROPS:
+            raise ValueError(f"Unknown crop '{value}'. Valid crops: {', '.join(guide.CROPS)}")
         return value
 
     def is_complete(self) -> bool:
@@ -701,6 +720,27 @@ def promote_model(request: PromoteRequest) -> dict:
         "current": request.version,
         "previous": previous,
         "registry_recorded": registry_recorded,
+    }
+
+
+@app.post("/admin/reload-guide", dependencies=[Depends(require_api_key)])
+def reload_guide_endpoint() -> dict:
+    """Re-reads crops/crop_variants/crop_nutrient_targets from Supabase and
+    reassigns guide.GUIDE_ROWS/CROPS/etc. in place -- called by suri's
+    crop-reference CMS after every create/bulk-upload so a newly added crop
+    is immediately recognized by /predict and training-data upload, without
+    a process restart. Single uvicorn worker (deploy/suri-ml.service), so
+    there is no cross-worker inconsistency window."""
+    try:
+        guide.reload_guide()
+    except Exception as error:
+        logger.error("Failed to reload guide data: %s", error)
+        raise HTTPException(status_code=502, detail=f"Reload failed: {error}") from error
+
+    return {
+        "success": True,
+        "crop_count": len(guide.CROPS),
+        "canonical_crop_count": len(guide.CANONICAL_CROPS),
     }
 
 
