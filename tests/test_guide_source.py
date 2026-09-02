@@ -1,3 +1,5 @@
+import pytest
+
 from data.guide_source import GuideRow, GuideSource, build_guide_source
 
 
@@ -94,3 +96,46 @@ class TestBuildGuideSource:
     def test_returns_a_guide_source_instance(self):
         assert isinstance(build_guide_source(_minimal_client()), GuideSource)
         assert isinstance(build_guide_source(_minimal_client()).guide_rows["Cassava"], GuideRow)
+
+    def test_duplicate_crop_nutrient_targets_row_raises_instead_of_overwriting(self):
+        crops = [{"id": "c-rice", "value": "Rice", "unit": "kg_ha", "alias_of_crop_id": None}]
+        crop_nutrient_targets = [
+            {
+                "crop_id": "c-rice", "variant_key": None,
+                "om_bands": [[None, 45]], "p_bands": [[None, 60]], "k_bands": [[None, 60]],
+            },
+            {
+                "crop_id": "c-rice", "variant_key": None,
+                "om_bands": [[None, 999]], "p_bands": [[None, 999]], "k_bands": [[None, 999]],
+            },
+        ]
+        client = FakeSupabaseClient(crops, [], crop_nutrient_targets)
+        with pytest.raises(ValueError, match="Duplicate crop_nutrient_targets row"):
+            build_guide_source(client)
+
+    def test_cultivation_method_options_without_a_default_raises(self):
+        crops = [{"id": "c-rice", "value": "Rice", "unit": "kg_ha", "alias_of_crop_id": None}]
+        crop_variants = [
+            {"crop_id": "c-rice", "dimension": "cultivation_method", "option_value": "Upland", "is_default": False},
+            {"crop_id": "c-rice", "dimension": "cultivation_method", "option_value": "Lowland Wet", "is_default": False},
+        ]
+        client = FakeSupabaseClient(crops, crop_variants, [])
+        with pytest.raises(ValueError, match="No default cultivation_method marked for: Rice"):
+            build_guide_source(client)
+
+    def test_variety_options_without_a_default_do_not_raise(self):
+        # Unlike cultivation_method, a variety dimension with no default is a
+        # legitimate shape (e.g. Rice tracks variety as an ML feature while
+        # cultivation_method is the dimension that actually keys GUIDE_ROWS)
+        # -- see the comment in build_guide_source() above the
+        # cultivation_method validation for why only that dimension is
+        # required to have a default.
+        crops = [{"id": "c-corn", "value": "Corn", "unit": "kg_ha", "alias_of_crop_id": None}]
+        crop_variants = [
+            {"crop_id": "c-corn", "dimension": "variety", "option_value": "Hybrid", "is_default": False},
+            {"crop_id": "c-corn", "dimension": "variety", "option_value": "Native", "is_default": False},
+        ]
+        client = FakeSupabaseClient(crops, crop_variants, [])
+        source = build_guide_source(client)
+        assert source.varieties_by_crop == {"Corn": ("Hybrid", "Native")}
+        assert "Corn" not in source.default_variety_row
