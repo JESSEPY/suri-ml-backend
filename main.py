@@ -733,9 +733,9 @@ def reload_guide_endpoint() -> dict:
     there is no cross-worker inconsistency window."""
     try:
         guide.reload_guide()
-    except Exception as error:
-        logger.error("Failed to reload guide data: %s", error)
-        raise HTTPException(status_code=502, detail=f"Reload failed: {error}") from error
+    except Exception:
+        logger.exception("Failed to reload guide data")
+        raise HTTPException(status_code=502, detail="Reload failed") from None
 
     return {
         "success": True,

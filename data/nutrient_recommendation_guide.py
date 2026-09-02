@@ -125,8 +125,9 @@ def _band_value(value: float, bands: tuple[tuple[float, float], ...]) -> float:
 
 
 # Module-level state, reassigned wholesale by reload_guide() -- never
-# mutated in place. Populated once below at import time, and again by
-# main.py's POST /admin/reload-guide. Every consumer (this file's own
+# mutated in place. Starts empty here; reload_guide() populates it for
+# real at process startup (main.py's lifespan) and again on every
+# POST /admin/reload-guide. Every consumer (this file's own
 # resolve_*/nutrient_requirements functions, ml/preprocessing.py's
 # build_categories(), main.py's and data/training_upload.py's crop
 # validators) reads these as plain module attributes, so a reassignment

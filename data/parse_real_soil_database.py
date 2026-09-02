@@ -431,6 +431,7 @@ def write_csv(rows: list[dict], output_path: str = OUTPUT_CSV) -> None:
 
 
 if __name__ == "__main__":
+    guide.reload_guide()
     xlsx_path = sys.argv[1] if len(sys.argv) > 1 else DEFAULT_XLSX_PATH
     rows, report = parse_workbook(xlsx_path)
     write_csv(rows)

@@ -67,6 +67,8 @@ def build_guide_source(client) -> GuideSource:
     for row in target_rows:
         crop_value = value_by_id[row["crop_id"]]
         key = f"{crop_value}|{row['variant_key']}" if row["variant_key"] else crop_value
+        if key in guide_rows:
+            raise ValueError(f"Duplicate crop_nutrient_targets row for {key!r}")
         guide_rows[key] = GuideRow(
             unit=crop_by_id[row["crop_id"]]["unit"],
             om_bands=_bands_from_json(row["om_bands"]),
