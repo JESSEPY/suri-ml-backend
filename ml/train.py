@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 from datetime import datetime, timezone
 
 import joblib
@@ -32,9 +33,33 @@ RANDOM_SEED = 42
 ARTIFACT_ROOT = "ml/artifacts"
 GROUP_COLUMN = "laboratory_code"
 
+_BASE_LAB_CODE = re.compile(r"^\d{4}-SCC\d+")
+
+
+def sample_group(laboratory_code: str) -> str:
+    """The physical-sample grouping key for a laboratory_code, collapsing
+    intercrop-expanded sibling rows (e.g. '2024-SCC1791-RICE' and
+    '2024-SCC1791-CORN', see data/parse_real_soil_database.py's
+    normalize_lab_code) back to the one physical sample they share
+    ('2024-SCC1791').
+
+    laboratory_code itself must stay per-crop-unique -- it's the Supabase
+    upsert primary key -- but this module's leakage-safety invariant (see
+    the module docstring: "each physical sample must stay entirely within
+    one split") is about the *physical sample*, not the stored string. Two
+    sibling rows with byte-identical ph/OM/P/K must never land in different
+    splits just because their stored codes differ.
+
+    Falls back to the code unchanged for anything that doesn't match the
+    '{year}-SCC{number}' shape -- STK/IoT/admin-uploaded rows use other
+    code schemes and were never suffixed to begin with, so each such code
+    is already its own group of one."""
+    match = _BASE_LAB_CODE.match(str(laboratory_code))
+    return match.group(0) if match else str(laboratory_code)
+
 
 def grouped_split(frame: pd.DataFrame, seed: int = RANDOM_SEED):
-    groups = frame[GROUP_COLUMN].to_numpy()
+    groups = frame[GROUP_COLUMN].map(sample_group).to_numpy()
 
     holdout = GroupShuffleSplit(n_splits=1, test_size=0.30, random_state=seed)
     train_idx, rest_idx = next(holdout.split(frame, groups=groups))
@@ -42,7 +67,8 @@ def grouped_split(frame: pd.DataFrame, seed: int = RANDOM_SEED):
     rest_df = frame.iloc[rest_idx]
 
     halve = GroupShuffleSplit(n_splits=1, test_size=0.50, random_state=seed)
-    val_idx, test_idx = next(halve.split(rest_df, groups=rest_df[GROUP_COLUMN].to_numpy()))
+    rest_groups = rest_df[GROUP_COLUMN].map(sample_group).to_numpy()
+    val_idx, test_idx = next(halve.split(rest_df, groups=rest_groups))
     return train_df, rest_df.iloc[val_idx], rest_df.iloc[test_idx]
 
 
@@ -163,7 +189,7 @@ def train(frame: pd.DataFrame, output_dir: str | None = None, seed: int = RANDOM
     y_train = train_df[TARGET_COLUMNS].to_numpy(dtype=float)
     y_test = test_df[TARGET_COLUMNS].to_numpy(dtype=float)
 
-    weights = cv_weights(X_train, y_train, train_df[GROUP_COLUMN].to_numpy())
+    weights = cv_weights(X_train, y_train, train_df[GROUP_COLUMN].map(sample_group).to_numpy())
     regressor = LogTargetRegressor(EnsembleFertilizerRegressor(weights=weights)).fit(X_train, y_train)
 
     metrics = evaluate(
@@ -178,7 +204,7 @@ def train(frame: pd.DataFrame, output_dir: str | None = None, seed: int = RANDOM
         "trained_at": datetime.now(timezone.utc).isoformat(),
         "seed": seed,
         "n_rows": len(frame),
-        "n_records": int(frame[GROUP_COLUMN].nunique()),
+        "n_records": int(frame[GROUP_COLUMN].map(sample_group).nunique()),
         "split_sizes": {"train": len(train_df), "val": len(val_df), "test": len(test_df)},
         "voting_weights": [{"xgb": xgb, "krr": krr} for xgb, krr in weights],
         "metrics": metrics,
