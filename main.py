@@ -33,6 +33,7 @@ from data.nutrient_recommendation_guide import (
 from data.training_upload import (
     TEMPLATE_COLUMNS, UploadFormatError, build_training_row, parse_upload, validate_rows,
 )
+from data import validation_cache
 from ml.agronomy import total_nitrogen_from_om
 from ml.confidence import (
     DISAGREEMENT_DOWNGRADE_THRESHOLD, TIER_PCT_CEILING,
@@ -50,6 +51,13 @@ logger = logging.getLogger("suri-ml")
 logging.basicConfig(level=logging.INFO)
 
 SQM_PER_HECTARE = 10_000
+
+# How many accepted rows /training-data/validate echoes in full (raw +
+# derived) for the admin review screen -- the rest are still committed via
+# the token (see data/validation_cache.py), just not individually rendered.
+# 200 comfortably covers several pages of the admin UI's 10-per-page table
+# without re-approaching the Vercel proxy's response-size cap.
+ACCEPTED_PREVIEW_LIMIT = 200
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
@@ -138,7 +146,7 @@ class SoilTestRequest(BaseModel):
 
 
 class CommitRequest(BaseModel):
-    rows: list[dict]
+    token: str
 
 
 class PromoteRequest(BaseModel):
@@ -549,7 +557,16 @@ def predict(request: SoilTestRequest, background_tasks: BackgroundTasks) -> Pred
 @app.post("/training-data/validate", dependencies=[Depends(require_api_key)])
 async def validate_training_upload(file: UploadFile = File(...)) -> dict:
     """Dry run: parses, validates, and shows what every accepted row would
-    contribute. Writes nothing."""
+    contribute. Writes nothing.
+
+    The full result (every accepted row's raw + derived data) is cached
+    server-side under a token rather than returned in full -- for a file
+    with a few thousand accepted rows, echoing all of it back can produce a
+    multi-megabyte response, over the Vercel proxy's 4.5MB body cap in
+    front of this service. The browser gets a bounded preview plus counts;
+    /training-data/commit takes the token back instead of the full row
+    list, so the data never crosses the network twice. See
+    data/validation_cache.py."""
     content = await file.read()
     try:
         raw_rows = parse_upload(content, file.filename or "upload.csv")
@@ -566,23 +583,50 @@ async def validate_training_upload(file: UploadFile = File(...)) -> dict:
     # so FastAPI already threadpools it.)
     codes = await run_in_threadpool(_existing_laboratory_codes)
     result = await run_in_threadpool(validate_rows, raw_rows, codes)
+    token = validation_cache.store(result)
     return {
         "template_columns": TEMPLATE_COLUMNS,
-        "accepted": result.accepted,
+        "token": token,
+        "accepted_count": len(result.accepted),
+        "accepted_preview": result.accepted[:ACCEPTED_PREVIEW_LIMIT],
         "rejected": result.rejected,
     }
 
 
 @app.post("/training-data/commit", dependencies=[Depends(require_api_key)])
 def commit_training_upload(request: CommitRequest) -> dict:
-    """Re-validates from the raw rows rather than trusting anything derived
-    client-side, then upserts only what passes."""
-    if not request.rows:
-        raise HTTPException(status_code=422, detail="No rows supplied.")
+    """Commits a previously-validated batch by token (see
+    /training-data/validate and data/validation_cache.py) -- the full row
+    data was already computed server-side from the uploaded file, so unlike
+    the old rows-in-the-request-body design there's nothing client-supplied
+    left to distrust. Still re-checks each accepted row's laboratory_code
+    against a fresh read of existing training data, since a different
+    upload could have committed a colliding code in the gap between this
+    batch's validate and commit calls."""
+    result = validation_cache.pop(request.token)
+    if result is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Validation batch not found or expired -- please re-upload and validate again.",
+        )
 
-    result = validate_rows(request.rows, _existing_laboratory_codes())
-    committed = _commit_rows([build_training_row(entry["raw"]) for entry in result.accepted])
-    return {"committed": committed, "rejected": result.rejected}
+    existing_codes = _existing_laboratory_codes()
+    accepted = [entry for entry in result.accepted if entry["laboratory_code"] not in existing_codes]
+    rejected = list(result.rejected) + [
+        {
+            "row_number": entry["row_number"],
+            "laboratory_code": entry["laboratory_code"],
+            "reason": f"laboratory_code {entry['laboratory_code']!r} is already in the training data.",
+        }
+        for entry in result.accepted
+        if entry["laboratory_code"] in existing_codes
+    ]
+
+    if not accepted:
+        raise HTTPException(status_code=422, detail="No rows to commit.")
+
+    committed = _commit_rows([build_training_row(entry["raw"]) for entry in accepted])
+    return {"committed": committed, "rejected": rejected}
 
 
 @app.post("/retrain", dependencies=[Depends(require_api_key)])

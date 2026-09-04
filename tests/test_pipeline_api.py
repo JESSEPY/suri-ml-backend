@@ -50,9 +50,10 @@ class TestValidateEndpoint:
         )
         assert response.status_code == 200
         body = response.json()
-        assert len(body["accepted"]) == 1
+        assert body["accepted_count"] == 1
+        assert len(body["accepted_preview"]) == 1
         assert body["rejected"] == []
-        assert body["accepted"][0]["derived"]["target_unit"] == "kg_ha"
+        assert body["accepted_preview"][0]["derived"]["target_unit"] == "kg_ha"
 
     def test_reports_bad_rows_without_failing_the_request(self, client):
         rows = [VALID, {**VALID, "laboratory_code": "2026-API2", "crop": "Papaya"}]
@@ -62,8 +63,31 @@ class TestValidateEndpoint:
         )
         assert response.status_code == 200
         body = response.json()
-        assert len(body["accepted"]) == 1
+        assert body["accepted_count"] == 1
         assert "Papaya" in body["rejected"][0]["reason"]
+
+    def test_returns_a_usable_token(self, client):
+        """The token is what /commit takes instead of the full row list --
+        the whole point of this response shape is that the browser never
+        has to send the accepted rows back."""
+        response = client.post(
+            "/training-data/validate",
+            files={"file": ("upload.csv", io.BytesIO(upload_csv([VALID])), "text/csv")},
+        )
+        token = response.json()["token"]
+        assert isinstance(token, str) and len(token) > 0
+
+    def test_accepted_preview_is_capped_even_when_more_rows_are_accepted(self, client):
+        """A large file must not blow the response back up to full size --
+        the preview is bounded regardless of how many rows were accepted."""
+        rows = [{**VALID, "laboratory_code": f"2026-API{i}"} for i in range(300)]
+        response = client.post(
+            "/training-data/validate",
+            files={"file": ("upload.csv", io.BytesIO(upload_csv(rows)), "text/csv")},
+        )
+        body = response.json()
+        assert body["accepted_count"] == 300
+        assert len(body["accepted_preview"]) < 300
 
     def test_unsupported_file_type_is_a_422(self, client):
         response = client.post(
@@ -115,22 +139,62 @@ class TestValidateEndpoint:
         )
 
         assert response.status_code == 200
-        assert len(response.json()["accepted"]) == 1  # the seams really ran
+        assert response.json()["accepted_count"] == 1  # the seams really ran
         assert on_loop == []
 
 
 class TestCommitEndpoint:
-    def test_revalidates_and_commits_only_good_rows(self, client):
-        response = client.post("/training-data/commit", json={
-            "rows": [VALID, {**VALID, "laboratory_code": "2026-API3", "crop": "Nope"}],
-        })
+    def _validate(self, client, rows):
+        response = client.post(
+            "/training-data/validate",
+            files={"file": ("upload.csv", io.BytesIO(upload_csv(rows)), "text/csv")},
+        )
+        return response.json()["token"]
+
+    def test_commits_only_what_validate_already_accepted(self, client):
+        """Filtering bad rows out now happens once, at /validate -- /commit
+        just commits whatever that same request already accepted, by
+        token. A row invalid enough to reject never makes it into the
+        cached batch at all, so there's nothing left for /commit to
+        re-reject here."""
+        token = self._validate(client, [VALID, {**VALID, "laboratory_code": "2026-API3", "crop": "Nope"}])
+        response = client.post("/training-data/commit", json={"token": token})
         assert response.status_code == 200
         body = response.json()
         assert body["committed"] == 1
-        assert len(body["rejected"]) == 1
+        assert len(body["rejected"]) == 1  # the "Nope" row, carried over from validate
 
-    def test_empty_payload_is_a_422(self, client):
-        assert client.post("/training-data/commit", json={"rows": []}).status_code == 422
+    def test_unknown_token_is_a_404(self, client):
+        response = client.post("/training-data/commit", json={"token": "does-not-exist"})
+        assert response.status_code == 404
+
+    def test_token_is_one_shot(self, client):
+        """Committing the same token twice (double-click, retried request)
+        must not silently recommit or double-count rows."""
+        token = self._validate(client, [VALID])
+        first = client.post("/training-data/commit", json={"token": token})
+        assert first.status_code == 200
+        second = client.post("/training-data/commit", json={"token": token})
+        assert second.status_code == 404
+
+    def test_no_accepted_rows_is_a_422(self, client):
+        token = self._validate(client, [{**VALID, "crop": "Nope"}])
+        response = client.post("/training-data/commit", json={"token": token})
+        assert response.status_code == 422
+
+    def test_a_code_committed_elsewhere_since_validate_is_rejected_not_silently_written(
+        self, client, monkeypatch
+    ):
+        """The original commit endpoint re-validated from raw rows partly to
+        catch a laboratory_code that became a duplicate in the gap between
+        validate and commit (a second upload finishing first). The token
+        design still needs this: it just checks against a fresh read of
+        existing codes at commit time instead of re-deriving everything."""
+        token = self._validate(client, [VALID])
+        monkeypatch.setattr(service, "_existing_laboratory_codes", lambda: {VALID["laboratory_code"]})
+        response = client.post("/training-data/commit", json={"token": token})
+        assert response.status_code == 422
+        assert response.json()["detail"] == "No rows to commit."
 
 
 class TestRetrainEndpoints:
