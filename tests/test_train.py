@@ -5,12 +5,47 @@ import pytest
 
 from tests.fixtures import sample_training_frame
 from ml.preprocessing import FEATURE_COLUMNS, TARGET_COLUMNS
-from ml.train import grouped_split, cv_weights, train, _load_frame
+from ml.train import grouped_split, cv_weights, train, _load_frame, sample_group
 
 
 @pytest.fixture(scope="module")
 def frame():
     return sample_training_frame(num_records=200, seed=42)
+
+
+def _with_intercrop_sibling_pairs(base_frame: pd.DataFrame, num_pairs: int) -> pd.DataFrame:
+    """Relabels the first num_pairs*2 rows into num_pairs sibling pairs that
+    share one '{year}-SCC{n}' base code with different suffixes -- mirroring
+    data/parse_real_soil_database.py's intercrop expansion (see its
+    normalize_lab_code), where two rows from one physical sample get
+    different laboratory_code values but must still be treated as one
+    group for split purposes."""
+    frame = base_frame.copy()
+    codes = frame["laboratory_code"].tolist()
+    for pair_index in range(num_pairs):
+        i, j = pair_index * 2, pair_index * 2 + 1
+        base = f"2022-SCC{pair_index}"
+        codes[i] = f"{base}-A"
+        codes[j] = f"{base}-B"
+    frame["laboratory_code"] = codes
+    return frame
+
+
+class TestSampleGroup:
+    def test_strips_crop_suffix(self):
+        assert sample_group("2024-SCC1791-RICE") == "2024-SCC1791"
+
+    def test_no_suffix_returns_unchanged(self):
+        assert sample_group("2024-SCC1791") == "2024-SCC1791"
+
+    def test_non_matching_format_returns_unchanged(self):
+        """STK/IoT/admin-uploaded rows use their own code schemes and were
+        never crop-suffixed -- must pass through untouched, not be mangled
+        by a regex built for the DA7 bulk-import format."""
+        assert sample_group("TEST-42") == "TEST-42"
+
+    def test_sibling_codes_collapse_to_the_same_group(self):
+        assert sample_group("2024-SCC1791-RICE") == sample_group("2024-SCC1791-CORN")
 
 
 class TestGroupedSplit:
@@ -44,6 +79,30 @@ class TestGroupedSplit:
         train_df, _, _ = grouped_split(frame, seed=42)
         counts = train_df.groupby("laboratory_code").size()
         assert (counts == 1).all()
+
+    def test_intercrop_sibling_pairs_never_split_across_sets(self, frame):
+        """The leakage-safety guarantee this class already tests for plain
+        laboratory_code must extend to intercrop-expanded sibling rows too:
+        two rows sharing one physical sample's chemistry (different
+        laboratory_code, same '{year}-SCC{n}' base) must land in the same
+        split, never split apart -- see the module docstring's "each
+        physical sample must stay entirely within one split." Without
+        sample_group() collapsing them back to their shared base code,
+        GroupShuffleSplit would treat the two suffixed codes as unrelated
+        groups and could freely separate them."""
+        sibling_frame = _with_intercrop_sibling_pairs(frame, num_pairs=30)
+        train_df, val_df, test_df = grouped_split(sibling_frame, seed=42)
+
+        def split_of(code: str) -> str:
+            if code in set(train_df.laboratory_code):
+                return "train"
+            if code in set(val_df.laboratory_code):
+                return "val"
+            return "test"
+
+        for pair_index in range(30):
+            a, b = f"2022-SCC{pair_index}-A", f"2022-SCC{pair_index}-B"
+            assert split_of(a) == split_of(b), f"sibling pair {a}/{b} landed in different splits"
 
 
 class TestCvWeights:

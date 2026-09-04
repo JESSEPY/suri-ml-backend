@@ -9,6 +9,13 @@ confirmed by direct inspection: even within the three near-identical
 to 2022/2024 starting at Organic Matter. Every column is located by matching
 its header text on that specific sheet (find_column), never a hardcoded
 index shared across sheets.
+
+An intercropped Crops cell (more than one species named, e.g. "Corn, Rice")
+expands into one training row per *recognized* species sharing that one
+sample's chemistry reading, instead of being dropped outright — see
+normalize_crops and parse_sheet. A genuinely single-crop cell is unaffected:
+same normalize_crop path, same unsuffixed laboratory_code, as before this
+was added.
 """
 
 from __future__ import annotations
@@ -23,6 +30,7 @@ from ml.agronomy import nutrient_requirements, total_nitrogen_from_om
 from ml.recipes import plan_applications
 from ml.remarks import derive_k_remark, derive_om_remark, derive_p_remark, derive_ph_remark
 from data import nutrient_recommendation_guide as guide
+from data.training_upload import NUMERIC_BOUNDS
 from data.nutrient_recommendation_guide import (
     k_cmol_to_ppm, target_unit_for_crop,
     resolve_variety, resolve_cultivation_method, resolve_age_band,
@@ -63,16 +71,23 @@ CROP_VARIETY_MAP: dict[str, tuple[str, str | None]] = {
     "rice inbred": ("Rice", "Inbred"),
     # --- Vegetable real-world label variants ------------------------------
     "lettuce": ("Lettuce", None),
+    "malunggay": ("Lettuce", None),
     "pechay": ("Cabbage", None),
+    "broccoli": ("Cabbage", None),
+    "spinach": ("Cabbage", None),
     "ampalaya": ("Ampalaya", None),
     "eggplant": ("Eggplant", None),
     "talong": ("Eggplant", None),
     "okra": ("Eggplant", None),
+    "lady finger": ("Eggplant", None),
     "sayote": ("Chayote", None),
     "cabbage": ("Cabbage", None),
     "red cabbage": ("Cabbage", None),
     "repolyo": ("Cabbage", None),
     "squash": ("Squash", None),
+    "kalabasa": ("Squash", None),
+    "patola": ("Squash", None),
+    "upo": ("Squash", None),
     "cauliflower": ("Cauliflower", None),
     "carrots": ("Radish", None),
     "radish": ("Radish", None),
@@ -80,6 +95,10 @@ CROP_VARIETY_MAP: dict[str, tuple[str, str | None]] = {
     "cucumber": ("Cucumber", None),
     "pipino": ("Cucumber", None),
     "watermelon": ("Cucumber", None),
+    # "Alugbati/Kangkong" is its own guide row (CANONICAL_CROPS has
+    # "Alugbati" directly) -- not a synonym for another already-coded crop.
+    "alugbati": ("Alugbati", None),
+    "kangkong": ("Alugbati", None),
     # --- Condiment / rootcrop / legume / sugarcane real-world variants ---
     "sugarcane": ("Sugarcane", None),
     "onions": ("Onion", None),
@@ -93,13 +112,23 @@ CROP_VARIETY_MAP: dict[str, tuple[str, str | None]] = {
     "ube": ("Gabi", None),
     "ubi": ("Gabi", None),
     "ube kinampay": ("Gabi", None),
+    # "Gabi/Ube/Yam/Taro" is one guide row -- Taro is the missing synonym.
+    "taro": ("Gabi", None),
+    "kamatis": ("Tomato", None),
+    "peanuts": ("Peanut", None),
     "kamote": ("Cassava", None),
+    "camote": ("Cassava", None),
     "sweet potato": ("Cassava", None),
     "beans": ("Beans", None),
     "string beans": ("Beans", None),
     "baguio beans": ("Beans", None),
     "mung beans": ("Peanut", None),
     "mungbean": ("Peanut", None),
+    "mungbeans": ("Peanut", None),
+    "mongo": ("Peanut", None),
+    "monggo": ("Peanut", None),
+    "soybean": ("Peanut", None),
+    "cowpea": ("Peas", None),
     # Guide co-lists "Garlic/ Chili Pepper" on one row (CROP_ALIASES already
     # has "Chili Pepper" -> Garlic); real labels overwhelmingly use "Sili"
     # (Filipino for chili) rather than the English name. Bell/sweet pepper
@@ -122,6 +151,27 @@ CROP_VARIETY_MAP: dict[str, tuple[str, str | None]] = {
     "lemon": ("Citrus", None),
     "avocado": ("Avocado", None),
     "jackfruit": ("Avocado", None),
+    "pineapple": ("Pineapple", None),
+    # Phase 2 tree/plantation row:
+    # "Avocado/Chico/Atis/Guyabano/Apple/Cashew/Jackfruit/Macopa/Tambis/Balimbing".
+    "guyabano": ("Avocado", None),
+    "chico": ("Avocado", None),
+    "atis": ("Avocado", None),
+    # "9 free species" Mango row -- Santol/Caimito/Durian/Marang, a
+    # DIFFERENT tropical-fruit-tree grouping than the Avocado row directly
+    # above, despite the surface-level similarity. Verified against the
+    # design doc's exact wording, not assumed -- getting this wrong would
+    # silently corrupt these crops' N/P2O5/K2O targets.
+    "caimito": ("Mango", None),
+    "durian": ("Mango", None),
+    # Phase 2 tree/plantation row: "Lanzones/Rambutan/Mangosteen".
+    "rambutan": ("Lanzones", None),
+    "mangosteen": ("Lanzones", None),
+    # --- Cebuano/Visayan dialect real-world label variants (Region 7 is
+    # the source region for this workbook) -------------------------------
+    "lubi": ("Coconut", None),
+    "mais": ("Corn", None),
+    "saging": ("Banana", None),
 }
 
 _LAB_CODE_DIGITS = re.compile(r"\d+")
@@ -155,14 +205,61 @@ def parse_numeric_cell(value: object) -> float | None:
     return None
 
 
-def normalize_lab_code(raw_code: str, year_label: str) -> str:
+def normalize_lab_code(
+    raw_code: str, year_label: str, crop: str | None = None, variety: str | None = None,
+) -> str:
     """'SCC 417' / 'SCC417' / 'SCC 0417' (any year) -> '{year}-SCC417',
     collapsing whitespace/zero-padding/case differences within a year, while
     keeping different years distinct (the same number is reused every year
-    for an unrelated physical sample)."""
+    for an unrelated physical sample).
+
+    `crop`, when given, appends a '-{CROP}' suffix, and `variety` (when also
+    given) a further '-{VARIETY}' -- used only when one source row (one
+    physical sample) expands into more than one training row via intercrop
+    splitting, so each still gets a unique code. The upsert primary key in
+    data/ingest_to_supabase.py is (laboratory_code, data_source); two rows
+    sharing one unsuffixed code would silently overwrite each other on
+    ingest. Crop alone is not always enough: normalize_crops dedupes by
+    (crop, variety), so two intercrop segments can legitimately resolve to
+    the same crop with different varieties (e.g. "Corn Tundan" -> (Corn,
+    None) and "Corn OPV" -> (Corn, OPV), real source: '2022-SCC877') and
+    both survive as distinct rows -- a crop-only suffix would collide again.
+    Omitting crop (the default) reproduces the exact
+    pre-intercrop-expansion code, since already-ingested Supabase rows are
+    keyed on it."""
     digits = _LAB_CODE_DIGITS.findall(str(raw_code))
     number = int("".join(digits)) if digits else 0
-    return f"{year_label}-SCC{number}"
+    code = f"{year_label}-SCC{number}"
+    if crop:
+        code = f"{code}-{crop.upper()}"
+        if variety:
+            code = f"{code}-{variety.upper()}"
+    return code
+
+
+def _match_crop_key(lowered_segment: str) -> tuple[str, str | None] | None:
+    """Matches one already-isolated, already-lowercased crop-name segment
+    (no comma/slash, no surrounding whitespace) against CROP_VARIETY_MAP.
+    A match is accepted either on the whole segment or on a leading,
+    whole-word prefix of it (so "coconut 6-8yrs" matches the bare
+    "coconut" key). Longest keys are tried first so a variety-specific key
+    (e.g. "hybrid rice") wins over its bare-crop substring ("rice")."""
+    for key in sorted(CROP_VARIETY_MAP, key=len, reverse=True):
+        if lowered_segment == key or lowered_segment.startswith(key + " "):
+            mapped = CROP_VARIETY_MAP[key]
+            if mapped[0] in guide.CANONICAL_CROPS:
+                return mapped
+    return None
+
+
+def _split_crop_text(raw_text: str | None) -> list[str]:
+    """Splits the free-text Crops cell on commas/slashes into individual
+    species segments, preserving each segment's original casing/qualifier
+    words (e.g. "Rice Upland") -- only surrounding whitespace is stripped.
+    Returns [] for blank/None text."""
+    if not raw_text or not str(raw_text).strip():
+        return []
+    return [p.strip() for p in re.split(r"[,/]", str(raw_text)) if p.strip()]
 
 
 def normalize_crop(raw_text: str | None) -> tuple[str, str | None] | None:
@@ -178,20 +275,57 @@ def normalize_crop(raw_text: str | None) -> tuple[str, str | None] | None:
     whole-word prefix of it. Longest keys are tried first so a
     variety-specific key (e.g. "hybrid rice") wins over its bare-crop
     substring ("rice")."""
-    if not raw_text or not str(raw_text).strip():
-        return None
-    parts = [p.strip().lower() for p in re.split(r"[,/]", str(raw_text)) if p.strip()]
+    parts = _split_crop_text(raw_text)
     if len(parts) != 1:
         return None
-    text = parts[0]
-    mapped = None
-    for key in sorted(CROP_VARIETY_MAP, key=len, reverse=True):
-        if text == key or text.startswith(key + " "):
-            mapped = CROP_VARIETY_MAP[key]
-            break
-    if mapped is None or mapped[0] not in guide.CANONICAL_CROPS:
-        return None
-    return mapped
+    return _match_crop_key(parts[0].lower())
+
+
+def normalize_crops(raw_text: str | None) -> list[tuple[str, str | None, str]]:
+    """The intercrop-aware counterpart to normalize_crop: for free text
+    naming more than one species (e.g. "Rice Upland, Corn"), returns one
+    (crop, variety, raw_segment) tuple per *recognized, distinct* species
+    instead of rejecting the whole row. raw_segment is that species' own
+    slice of the original text (original casing, not lowercased) -- callers
+    use it to scope cultivation-method/age-band inference to just that crop
+    rather than the whole cell. An unrecognized segment (dialect name not in
+    CROP_VARIETY_MAP, typo, non-crop text) is silently dropped, same as how
+    a wholly-unrecognized single crop is already dropped by normalize_crop
+    -- so a row with one real crop and one unmatched one still contributes
+    the real one instead of being discarded outright. Single-crop text
+    works here too (returns a one-element list).
+
+    Two segments that resolve to the SAME (crop, variety) are collapsed to
+    one entry (first occurrence kept) -- real source text regularly names
+    the same crop twice under different synonyms within one cell (e.g.
+    "Cassava, Kamote" -- Kamote is just the Filipino word for Cassava;
+    "Okra, Eggplant" -- Okra has no separate guide row and maps to
+    Eggplant's). Emitting both would produce two training rows with
+    identical chemistry AND identical targets for one physical sample, and
+    (since normalize_lab_code suffixes by crop) the same laboratory_code
+    twice, which the ingest upsert's uniqueness key correctly rejects."""
+    results = []
+    seen: set[tuple[str, str | None]] = set()
+    for raw_segment in _split_crop_text(raw_text):
+        mapped = _match_crop_key(raw_segment.lower())
+        if mapped is not None and mapped not in seen:
+            seen.add(mapped)
+            results.append((mapped[0], mapped[1], raw_segment))
+    return results
+
+
+def unmatched_crop_segments(raw_text: str | None) -> list[str]:
+    """normalize_crops()'s counterpart: returns exactly the segments of
+    raw_text it silently dropped (no CROP_VARIETY_MAP entry matches),
+    original casing and qualifier words intact -- a human reviewer deciding
+    whether to add a new synonym needs to see the real text, not a
+    normalized version of it. Used only to build an audit trail (see
+    collect_unrecognized_crop_texts); normalize_crops() itself stays
+    unaware this exists, so its own behavior/tests are untouched."""
+    return [
+        segment for segment in _split_crop_text(raw_text)
+        if _match_crop_key(segment.lower()) is None
+    ]
 
 
 def normalize_cultivation_method(crop: str, raw_text: str) -> str | None:
@@ -290,10 +424,19 @@ def build_column_map(worksheet, config: dict) -> dict[str, int]:
 def parse_sheet(worksheet, config: dict) -> list[dict]:
     """Reads one source sheet into raw (pre-target) records: real chemistry
     values where present, None where a field was field-tested instead of
-    lab-tested (or simply blank). Rows with no crop, a multi-crop entry, an
-    unsupported crop, or no real pH are excluded outright — everything else
-    is passed through for build_training_row to turn into a full row (or
-    reject, if OM/P/K are missing)."""
+    lab-tested (or simply blank). Rows with no recognized crop at all, or no
+    real pH, are excluded outright — everything else is passed through for
+    build_training_row to turn into a full row (or reject, if OM/P/K are
+    missing).
+
+    An intercropped cell (more than one species named) expands into one
+    record per *recognized* species (see normalize_crops), all sharing this
+    one physical sample's chemistry reading — the pH/OM/P/K measurement is
+    a property of the field, not of any single crop growing in it. Each
+    species' laboratory_code gets a crop suffix in that case (see
+    normalize_lab_code) so the two rows don't collide on ingest; a
+    genuinely single-crop row keeps its plain, unsuffixed code exactly as
+    before, so already-ingested rows are unaffected by this change."""
     column_map = build_column_map(worksheet, config)
     rows: list[dict] = []
 
@@ -303,36 +446,94 @@ def parse_sheet(worksheet, config: dict) -> list[dict]:
             continue
 
         crop_text = row[config["crop_col"]]
-        crop_variety = normalize_crop(crop_text)
-        if crop_variety is None:
+        crop_matches = normalize_crops(crop_text)
+        if not crop_matches:
             continue
-        crop, variety = crop_variety
 
         ph = parse_numeric_cell(row[column_map["ph"]])
         if ph is None:
             continue
 
-        rows.append({
-            "laboratory_code": normalize_lab_code(lab_code_raw, config["year"]),
-            "crop": crop,
-            "variety": variety,
-            "cultivation_method": normalize_cultivation_method(crop, str(crop_text)),
-            "age_band": normalize_age_band(crop, str(crop_text)),
-            "ph": ph,
-            "organic_matter_pct": parse_numeric_cell(row[column_map["organic_matter_pct"]]),
-            "phosphorus_ppm": parse_numeric_cell(row[column_map["phosphorus_ppm"]]),
-            "potassium_cmol_kg": parse_numeric_cell(row[column_map["potassium_cmol_kg"]]),
-            "total_nitrogen_pct": parse_numeric_cell(row[column_map["total_nitrogen_pct"]]),
-        })
+        organic_matter_pct = parse_numeric_cell(row[column_map["organic_matter_pct"]])
+        phosphorus_ppm = parse_numeric_cell(row[column_map["phosphorus_ppm"]])
+        potassium_cmol_kg = parse_numeric_cell(row[column_map["potassium_cmol_kg"]])
+        total_nitrogen_pct = parse_numeric_cell(row[column_map["total_nitrogen_pct"]])
+
+        is_intercropped = len(crop_matches) > 1
+        for crop, variety, raw_segment in crop_matches:
+            rows.append({
+                "laboratory_code": normalize_lab_code(
+                    lab_code_raw, config["year"],
+                    crop if is_intercropped else None,
+                    variety if is_intercropped else None,
+                ),
+                "crop": crop,
+                "variety": variety,
+                "cultivation_method": normalize_cultivation_method(crop, raw_segment),
+                "age_band": normalize_age_band(crop, raw_segment),
+                "ph": ph,
+                "organic_matter_pct": organic_matter_pct,
+                "phosphorus_ppm": phosphorus_ppm,
+                "potassium_cmol_kg": potassium_cmol_kg,
+                "total_nitrogen_pct": total_nitrogen_pct,
+            })
 
     return rows
+
+
+def collect_unrecognized_crop_texts(worksheet, config: dict) -> dict[str, int]:
+    """Tallies the free-text crop segments this sheet's lab-coded rows name
+    that unmatched_crop_segments() couldn't resolve -- the audit trail
+    normalize_crop()/normalize_crops() deliberately don't keep themselves
+    (they only report the row-level accept/reject outcome). Counts
+    duplicates: the same unrecognized text recurring across many rows is
+    exactly the signal worth acting on first when deciding what to add to
+    CROP_VARIETY_MAP next, instead of re-discarding the same near-misses on
+    every re-run. Mirrors parse_sheet()'s own row-inclusion gate (lab-coded
+    rows only) so the two stay comparable; a second pass over the same
+    worksheet rather than piggybacking on parse_sheet's own loop, so
+    parse_sheet's return contract (and the tests pinning it) stays
+    untouched."""
+    counts: dict[str, int] = {}
+    for row in worksheet.iter_rows(min_row=config["data_start_row"], values_only=True):
+        lab_code_raw = row[config["lab_code_col"]]
+        if not lab_code_raw or not str(lab_code_raw).strip():
+            continue
+        crop_text = row[config["crop_col"]]
+        for segment in unmatched_crop_segments(crop_text):
+            counts[segment] = counts.get(segment, 0) + 1
+    return counts
+
+
+def _within_bounds(field: str, value: float) -> bool:
+    """True if value satisfies every constraint NUMERIC_BOUNDS[field]
+    declares (imported from data.training_upload, the exact same table
+    tests/test_training_upload.py::TestBoundsMatchTheApi keeps in sync with
+    main.py's live SoilTestRequest bounds). A field with no entry there
+    (e.g. total_nitrogen_pct -- not an upload-template column) has no check
+    here either, matching the upload validator's own scope."""
+    bounds = NUMERIC_BOUNDS.get(field)
+    if not bounds:
+        return True
+    if "ge" in bounds and value < bounds["ge"]:
+        return False
+    if "gt" in bounds and value <= bounds["gt"]:
+        return False
+    if "le" in bounds and value > bounds["le"]:
+        return False
+    if "lt" in bounds and value >= bounds["lt"]:
+        return False
+    return True
 
 
 def build_training_row(raw: dict) -> dict | None:
     """Turns one raw parsed record into a full training row, or None if it
     can't get a real target (nutrient_requirements needs numeric OM/P/K —
     see the design spec for why this is a hard requirement, not something to
-    patch with an invented number)."""
+    patch with an invented number) or any of pH/OM/P/K parses to a real
+    number but outside a physically plausible range (e.g. a stray decimal
+    point turning 3.56% organic matter into 356% -- a corrupted value must
+    not become a training label any more than a missing one should)."""
     om = raw["organic_matter_pct"]
     p = raw["phosphorus_ppm"]
     k = raw["potassium_cmol_kg"]
@@ -340,6 +541,14 @@ def build_training_row(raw: dict) -> dict | None:
         return None
 
     ph = raw["ph"]
+    if not (
+        _within_bounds("ph", ph)
+        and _within_bounds("organic_matter_pct", om)
+        and _within_bounds("phosphorus_ppm", p)
+        and _within_bounds("potassium_cmol_kg", k)
+    ):
+        return None
+
     crop = raw["crop"]
     variety = raw["variety"]
     cultivation_method = raw["cultivation_method"]
@@ -395,6 +604,7 @@ def parse_workbook(xlsx_path: str) -> tuple[list[dict], dict]:
     workbook = openpyxl.load_workbook(xlsx_path, read_only=True, data_only=True)
     training_rows: list[dict] = []
     report: dict = {"sheets": {}}
+    unrecognized_crop_texts: dict[str, int] = {}
 
     for config in SHEET_CONFIGS:
         worksheet = workbook[config["name"]]
@@ -407,6 +617,15 @@ def parse_workbook(xlsx_path: str) -> tuple[list[dict], dict]:
             "rows_with_complete_om_p_k": len(usable),
             "dropped_for_incomplete_chemistry": len(raw_rows) - len(usable),
         }
+        for text, count in collect_unrecognized_crop_texts(worksheet, config).items():
+            unrecognized_crop_texts[text] = unrecognized_crop_texts.get(text, 0) + count
+
+    # Sorted by frequency, most-repeated first -- that's the order worth
+    # reviewing in when deciding what to add to CROP_VARIETY_MAP next (see
+    # collect_unrecognized_crop_texts).
+    report["unrecognized_crop_texts"] = dict(
+        sorted(unrecognized_crop_texts.items(), key=lambda item: -item[1])
+    )
 
     report["total_training_rows"] = len(training_rows)
     report["rows_by_crop"] = {}
@@ -431,6 +650,7 @@ def write_csv(rows: list[dict], output_path: str = OUTPUT_CSV) -> None:
 
 
 if __name__ == "__main__":
+    guide.reload_guide()
     xlsx_path = sys.argv[1] if len(sys.argv) > 1 else DEFAULT_XLSX_PATH
     rows, report = parse_workbook(xlsx_path)
     write_csv(rows)
@@ -440,3 +660,6 @@ if __name__ == "__main__":
     print(f"Per-variety: {report['rows_by_variety']}")
     print(f"Per-cultivation-method: {report['rows_by_cultivation_method']}")
     print(f"Per-age-band: {report['rows_by_age_band']}")
+    top_unrecognized = list(report["unrecognized_crop_texts"].items())[:20]
+    print(f"Top unrecognized crop texts ({len(report['unrecognized_crop_texts'])} distinct, "
+          f"top 20 shown): {top_unrecognized}")

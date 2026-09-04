@@ -67,6 +67,8 @@ def build_guide_source(client) -> GuideSource:
     for row in target_rows:
         crop_value = value_by_id[row["crop_id"]]
         key = f"{crop_value}|{row['variant_key']}" if row["variant_key"] else crop_value
+        if key in guide_rows:
+            raise ValueError(f"Duplicate crop_nutrient_targets row for {key!r}")
         guide_rows[key] = GuideRow(
             unit=crop_by_id[row["crop_id"]]["unit"],
             om_bands=_bands_from_json(row["om_bands"]),
@@ -104,6 +106,28 @@ def build_guide_source(client) -> GuideSource:
                 bearing_age_band[crop_value] = option
         else:
             raise ValueError(f"Unknown crop_variants.dimension {dimension!r} for crop {crop_value!r}")
+
+    # The DB schema's partial unique index enforces AT MOST one is_default=true
+    # row per (crop_id, dimension), never AT LEAST one -- a crop can end up
+    # with cultivation_method options and no default marked. Unlike variety
+    # (nutrient_recommendation_guide.py's _guide_row_key only ever consults
+    # DEFAULT_VARIETY_ROW for a crop already known to be in it, so a variety
+    # dimension with no default is a legitimate, harmless shape -- Rice's
+    # fixture data is exactly this: variety tracked as an ML feature, with
+    # cultivation_method as the actual GUIDE_ROWS-keying dimension),
+    # resolve_cultivation_method() looks up DEFAULT_CULTIVATION_METHOD_ROW[canonical]
+    # unconditionally for any crop with cultivation_method options. An admin
+    # data-entry gap here must fail the reload loudly (leaving the previous
+    # good in-memory guide in place -- reload_guide() only reassigns module
+    # state after this function returns successfully) rather than surface as
+    # a KeyError mid-request later.
+    missing_cultivation_method_defaults = sorted(
+        set(cultivation_methods_by_crop) - set(default_cultivation_method_row)
+    )
+    if missing_cultivation_method_defaults:
+        raise ValueError(
+            f"No default cultivation_method marked for: {', '.join(missing_cultivation_method_defaults)}"
+        )
 
     target_unit = {row["value"]: row["unit"] for row in crops_rows if row["alias_of_crop_id"] is None}
 
