@@ -519,16 +519,22 @@ class TestEndpointsWithoutAModelLoaded:
         assert response.status_code == 503
         assert "retrain" in response.json()["detail"].lower()
 
-    def test_predict_503_applies_to_the_table_lookup_path_too(self, client, monkeypatch):
-        """Even a complete request (which doesn't need the ML ensemble at
-        all) is refused -- model_version has nowhere honest to come from for
-        the response, and simplicity here beats partially serving one path."""
+    def test_predict_serves_the_table_lookup_path_without_a_model(self, client, monkeypatch):
+        """A complete request is answered exactly by the official guide table
+        and never touches the ML ensemble, so it must not depend on one being
+        trained. model_version reports "table-lookup" rather than a fake
+        version (the audit log column is NOT NULL). An incomplete reading
+        still needs the ensemble and keeps the 503 above."""
         monkeypatch.setattr(service.model_state, "snapshot", _raise_no_model_loaded)
         response = client.post("/predict", json={
             "crop": "Corn", "data_source": "lab", "ph": 6.5,
             "organic_matter_pct": 2.8, "phosphorus_ppm": 18.0, "potassium_cmol_kg": 0.35,
         })
-        assert response.status_code == 503
+        assert response.status_code == 200
+        body = response.json()
+        assert body["source"] == "table-lookup"
+        assert body["model_version"] == "table-lookup"
+        assert body["confidence"] is None
 
     def test_model_versions_reports_no_current_instead_of_crashing(self, client, monkeypatch):
         monkeypatch.setattr(service.model_state, "snapshot", _raise_no_model_loaded)

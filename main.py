@@ -439,14 +439,15 @@ def predict(request: SoilTestRequest, background_tasks: BackgroundTasks) -> Pred
     try:
         bundle = model_state.snapshot()
     except RuntimeError:
-        # Applies even to the table-lookup path below, which doesn't touch
-        # the regressor at all -- model_version has nowhere honest to come
-        # from for the response either way, and simplicity here beats
-        # partially serving one path before any model exists.
-        raise HTTPException(
-            status_code=503,
-            detail="No model has been trained yet — complete a first retrain before requesting predictions.",
-        )
+        # No model yet. Only the ML-estimate path below needs one; a complete
+        # request is answered exactly by the guide table, so it is still served
+        # (reported as model_version "table-lookup").
+        bundle = None
+        if not request.is_complete():
+            raise HTTPException(
+                status_code=503,
+                detail="No model has been trained yet — complete a first retrain before requesting predictions.",
+            )
     features = _build_feature_row(request)
 
     if request.is_complete():
@@ -544,7 +545,9 @@ def predict(request: SoilTestRequest, background_tasks: BackgroundTasks) -> Pred
             "k_remark": features.at[0, "k_remark"],
         },
         farm_totals=farm_totals,
-        model_version=bundle["version"],
+        # "table-lookup" (not a fake version) when no model is loaded; the
+        # ml_fertilizer_predictions.model_version audit column is NOT NULL.
+        model_version=bundle["version"] if bundle is not None else "table-lookup",
         source=source,
         confidence=confidence,
     )
